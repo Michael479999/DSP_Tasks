@@ -2,7 +2,9 @@
 # Requires: PySide6, matplotlib, numpy
 # pip install PySide6 matplotlib numpy
 
+import os
 import sys
+from typing import List, Union
 import numpy as np
 from PySide6 import QtWidgets, QtCore
 from PySide6.QtWidgets import (
@@ -10,8 +12,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QInputDialog, QLineEdit
 )
 from my_signal import Signal
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
+from matplot_canvas import MplCanvas
 from tests import (
     AddSignalSamplesAreEqual,
     SubSignalSamplesAreEqual,
@@ -19,59 +20,6 @@ from tests import (
     ShiftSignalByConst,
     Folding
 )
-
-# -------------------------
-# Matplotlib canvas for Qt
-# -------------------------
-class MplCanvas(FigureCanvas):
-    def __init__(self, parent=None, dpi=100):
-        fig = Figure(figsize=(6, 4), dpi=dpi, tight_layout=True)
-        self.ax = fig.add_subplot(111)
-        super().__init__(fig)
-        self.setParent(parent)
-
-    def plot_signal(self, signal: Signal):
-        self.ax.clear()
-        if signal.values.size == 0:
-            self.ax.set_title(f"{signal.name} (empty)")
-            self.draw()
-            return
-        n = signal.indices()
-        # stem plot
-        markerline, stemlines, baseline = self.ax.stem(n, signal.values)
-        self.ax.set_xlabel("n")
-        self.ax.set_ylabel("Amplitude")
-        self.ax.set_title(signal.name)
-        self.ax.grid(True)
-        self.draw()
-
-    def plot_multiple(self, signals):
-        self.ax.clear()
-        if not signals:
-            self.ax.set_title("No signals to plot")
-            self.draw()
-            return
-        # compute global start/end
-        starts = [s.start for s in signals if s.values.size > 0]
-        ends = [s.start + s.values.size - 1 for s in signals if s.values.size > 0]
-        if not starts:
-            self.ax.set_title("All signals empty")
-            self.draw()
-            return
-        full_start = min(starts)
-        full_end = max(ends)
-        n = np.arange(full_start, full_end + 1)
-        for s in signals:
-            arr = np.zeros(n.size)
-            if s.values.size > 0:
-                idx = s.start - full_start
-                arr[idx:idx + s.values.size] = s.values
-            self.ax.stem(n, arr, label=s.name, use_line_collection=True)
-        self.ax.set_xlabel("n")
-        self.ax.set_ylabel("Amplitude")
-        self.ax.legend()
-        self.ax.grid(True)
-        self.draw()
 
 # -------------------------
 # Main Application Window
@@ -90,7 +38,7 @@ class MainWindow(QMainWindow):
         # Left panel: controls and list
         left_panel = QtWidgets.QVBoxLayout()
         self.list_widget = QtWidgets.QListWidget()
-        self.list_widget.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)
+        self.list_widget.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.MultiSelection)
         left_panel.addWidget(QtWidgets.QLabel("Loaded signals (select one or more):"))
         left_panel.addWidget(self.list_widget)
 
@@ -127,10 +75,10 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(right_panel, 1)
 
         # data store
-        self.signals = []  # list of Signal objects
+        self.signals: List[Signal] = []
 
         # Connect signals
-        self.btn_load.clicked.connect(self.load_signal)
+        self.btn_load.clicked.connect(self.load_signals)
         self.btn_plot.clicked.connect(self.plot_selected)
         self.btn_plot_all.clicked.connect(self.plot_all)
         self.btn_add.clicked.connect(self.add_selected)
@@ -147,21 +95,24 @@ class MainWindow(QMainWindow):
     def add_signal_to_list(self, sig: Signal):
         self.signals.append(sig)
         item = QListWidgetItem(f"{sig.name}  (start={sig.start}, len={sig.values.size})")
-        item.setData(QtCore.Qt.UserRole, len(self.signals) - 1)  # index in self.signals
+        item.setData(QtCore.Qt.ItemDataRole.UserRole, len(self.signals) - 1)  # index in self.signals
         self.list_widget.addItem(item)
+    
+    def add_signals_to_list(self, sigs: List[Signal]):
+        [self.add_signal_to_list(sig) for sig in sigs]
 
     def refresh_list_items(self):
         self.list_widget.clear()
         for idx, s in enumerate(self.signals):
             item = QListWidgetItem(f"{s.name}  (start={s.start}, len={s.values.size})")
-            item.setData(QtCore.Qt.UserRole, idx)
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, idx)
             self.list_widget.addItem(item)
 
-    def get_selected_indices(self):
+    def get_selected_indices(self) -> List[int]:
         items = self.list_widget.selectedItems()
         indices = []
         for it in items:
-            idx = it.data(QtCore.Qt.UserRole)
+            idx = it.data(QtCore.Qt.ItemDataRole.UserRole)
             if isinstance(idx, int):
                 indices.append(idx)
         return indices
@@ -169,20 +120,28 @@ class MainWindow(QMainWindow):
     # -------------------------
     # Button callbacks
     # -------------------------
-    def load_signal(self):
-        fname, _ = QFileDialog.getOpenFileName(self, "Open signal file", "", "Text files (*.txt);;All files (*)")
-        if not fname:
+    def handle_signal_load(self, result: Union[Signal, Exception]):
+        if isinstance(result, Exception):
+            QMessageBox.critical(self, "Error reading file", str(result))
             return
-        try:
-            sig = Signal.from_file(fname)
-        except Exception as e:
-            QMessageBox.critical(self, "Error reading file", str(e))
-            return
-        # allow renaming
-        new_name, ok = QInputDialog.getText(self, "Signal name", "Enter name for signal:", QLineEdit.Normal, sig.name)
+
+        new_name, ok = QInputDialog.getText(
+            self,
+            "Signal name",
+            "Enter name for signal:",
+            QLineEdit.EchoMode.Normal,
+            result.name
+        )
+        
         if ok and new_name.strip():
-            sig.name = new_name.strip()
-        self.add_signal_to_list(sig)
+            result.name = new_name.strip()
+
+    def load_signals(self):
+        fnames, _ = QFileDialog.getOpenFileNames(self, "Open signal file(s)", "", "Text files (*.txt);;All files (*)")
+        if not fnames:
+            return
+        
+        self.add_signals_to_list(Signal.from_files(fnames, self.handle_signal_load))
 
     def plot_selected(self):
         idxs = self.get_selected_indices()
@@ -207,15 +166,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Select signals", "Select at least one signal to add.")
             return
         signals = [self.signals[i].copy() for i in idxs]
-        result = Signal.add(signals, name="sum")
-        self.add_signal_to_list(result)
+        res = signals[0].add(signals[1:])
+        self.add_signal_to_list(res)
         self.refresh_list_items()
-        # auto-save
-        save_signal_to_file("add.txt", result)
-
-        AddSignalSamplesAreEqual("Signal1.txt", "Signal2.txt", result.indices(), result.values)
-
-        QMessageBox.information(self, "Saved", "Addition result saved to add.txt")
+        
+        save_signal_to_file(f"{res.name}.txt", res)
+        QMessageBox.information(self, "Saved", f"Addition result saved to {res.name}.txt")
 
     def scale_selected(self):
         idxs = self.get_selected_indices()
@@ -226,7 +182,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Select one", "Select exactly one signal to scale.")
             return
         sig = self.signals[idxs[0]]
-        factor_s, ok = QInputDialog.getText(self, "Scale factor", "Enter scale factor (e.g., 5):", QLineEdit.Normal, "1.0")
+        factor_s, ok = QInputDialog.getText(self, "Scale factor", "Enter scale factor (e.g., 5):", QLineEdit.EchoMode.Normal, "1.0")
         if not ok:
             return
         try:
@@ -237,30 +193,23 @@ class MainWindow(QMainWindow):
         res = sig.scaled(factor, name=f"{sig.name}_x{factor}")
         self.add_signal_to_list(res)
         self.refresh_list_items()
-        # auto-save only if factor == 5 (test file requirement)
-        if abs(factor - 5) < 1e-9:
-            save_signal_to_file("mul5.txt", res)
-
-            MultiplySignalByConst(5, res.indices(), res.values)
-            
-            QMessageBox.information(self, "Saved", "Multiply result saved to mul5.txt")
+        
+        save_signal_to_file(f"{res.name}.txt", res)
+        QMessageBox.information(self, "Saved", f"Multiply result saved to {res.name}.txt")
 
     def subtract_selected(self):
         idxs = self.get_selected_indices()
         if len(idxs) != 2:
             QMessageBox.information(self, "Select two", "Select exactly two signals to subtract (A - B).")
             return
-        a = self.signals[idxs[0]]
-        b = self.signals[idxs[1]]
-        res = Signal.subtract(a, b, name=f"{a.name}_minus_{b.name}")
+        a: Signal = self.signals[idxs[0]]
+        b: Signal = self.signals[idxs[1]]
+        res = a.subtract(b)
         self.add_signal_to_list(res)
         self.refresh_list_items()
-        # auto-save
-        save_signal_to_file("subtract.txt", res)
 
-        SubSignalSamplesAreEqual("Signal1.txt", "Signal2.txt", res.indices(), res.values)
-
-        QMessageBox.information(self, "Saved", "Subtraction result saved to subtract.txt")
+        save_signal_to_file(f"{res.name}.txt", res)
+        QMessageBox.information(self, "Saved", f"Subtraction result saved to {res.name}.txt")
 
     def shift_selected(self):
         idxs = self.get_selected_indices()
@@ -268,26 +217,24 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Select one", "Select a single signal to shift.")
             return
         sig: Signal = self.signals[idxs[0]]
-        k_s, ok = QInputDialog.getText(self, "Shift k", "Enter integer k:", QLineEdit.Normal, "1")
+        k_s, ok = QInputDialog.getText(self, "Shift k", "Enter integer k:", QLineEdit.EchoMode.Normal, "1")
         if not ok:
             return
         try:
             k = int(k_s)
+            assert(k != 0)
         except:
-            QMessageBox.critical(self, "Bad value", "k must be integer.")
+            QMessageBox.critical(self, "Bad k-step shift value", "k must be integer not equal to 0.")
             return
-        res = sig.shifted(k, name=f"{sig.name}_shift_{k}")
+        
+        filename = f"{sig.name + "_advance_" + str(abs(k)) if k > 0 else sig.name + "_delay_" + str(abs(k))}.txt"
+
+        res = sig.shifted(k, name=filename)
         self.add_signal_to_list(res)
         self.refresh_list_items()
-        # auto-save to delay/advance files
-        if k == 3:
-            save_signal_to_file("advance3.txt", res)
-            ShiftSignalByConst(3, res.indices(), res.values)
-            QMessageBox.information(self, "Saved", "Shift result saved to advance3.txt")
-        elif k == -3:
-            save_signal_to_file("delay3.txt", res)
-            ShiftSignalByConst(-3, res.indices(), res.values)
-            QMessageBox.information(self, "Saved", "Shift result saved to delay3.txt")
+        
+        save_signal_to_file(filename, res)
+        QMessageBox.information(self, "Saved", f"Shift result saved to {filename}")
 
     def fold_selected(self):
         idxs = self.get_selected_indices()
@@ -298,31 +245,67 @@ class MainWindow(QMainWindow):
         res = sig.folded(name=f"{sig.name}_fold")
         self.add_signal_to_list(res)
         self.refresh_list_items()
-        # auto-save
-        save_signal_to_file("folding.txt", res)
-
-        Folding(res.indices(), res.values)
-
-        QMessageBox.information(self, "Saved", "Folding result saved to folding.txt")
+        
+        save_signal_to_file(f"{res.name}.txt", res)
+        QMessageBox.information(self, "Saved", f"Folding result saved to {res.name}.txt")
 
     def delete_selected(self):
         idxs = sorted(self.get_selected_indices(), reverse=True)
         if not idxs:
-            QMessageBox.information(self, "Select", "Select signals to delete.")
+            QMessageBox.information(self, "No Selection", "Please select one or more signals to delete.")
             return
+
+        confirm = QMessageBox.question(
+            self,
+            "Delete Signals",
+            (
+                f"Do you also want to delete the selected file(s) from your computer?\n\n"
+                "- Click 'Yes' to delete from file system.\n"
+                "- Click 'No' to remove only from the memory."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel
+        )
+
+        if confirm == QMessageBox.StandardButton.Cancel:
+            return
+
+        delete_from_disk = confirm == QMessageBox.StandardButton.Yes
+        deleted_count, failed = 0, []
+
         for i in idxs:
             try:
+                sig = self.signals[i]
+                if delete_from_disk and os.path.exists(sig.path):
+                    try:
+                        os.remove(sig.path)
+                    except Exception as e:
+                        failed.append((sig.name, str(e)))
                 del self.signals[i]
-            except IndexError:
-                pass
+                deleted_count += 1
+            except Exception as e:
+                failed.append((getattr(sig, "name", f"Signal {i}"), str(e)))
+
         self.refresh_list_items()
 
+        if failed:
+            msg = f"{deleted_count} signal(s) removed.\n\nSome files could not be deleted:\n"
+            msg += "\n".join([f"• {name}: {err}" for name, err in failed])
+            QMessageBox.warning(self, "Partial Deletion", msg)
+        else:
+            msg_type = "and deleted from disk" if delete_from_disk else "from the list only"
+            QMessageBox.information(
+                self,
+                "Deletion Complete",
+                f"{deleted_count} signal(s) successfully removed {msg_type}."
+            )
+
     def rename_item(self, item):
-        idx = item.data(QtCore.Qt.UserRole)
+        idx = item.data(QtCore.Qt.ItemDataRole.UserRole)
         if idx is None:
             return
         sig = self.signals[idx]
-        new_name, ok = QInputDialog.getText(self, "Rename", "New name:", QLineEdit.Normal, sig.name)
+        new_name, ok = QInputDialog.getText(self, "Rename", "New name:", QLineEdit.EchoMode.Normal, sig.name)
         if ok and new_name.strip():
             sig.name = new_name.strip()
             self.refresh_list_items()
@@ -333,9 +316,7 @@ def save_signal_to_file(filename, sig: Signal):
      f.write(f"{len(sig.values)}\n")
      for i, v in zip(sig.indices(), sig.values):
          f.write(f"{i} {v}\n")
-# -------------------------
-# Run app
-# -------------------------
+
 def main():
     app = QApplication(sys.argv)
     win = MainWindow()
