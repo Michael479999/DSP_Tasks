@@ -1,6 +1,8 @@
 # -------------------------
 # Signal representation
 # -------------------------
+import os
+from typing import Any, Callable, List, Optional, Union
 import numpy as np
 
 
@@ -9,13 +11,14 @@ class Signal:
     Represents a discrete-time signal as a numpy array with a start index n0.
     If samples correspond to indices n0 ... n0 + len(values) - 1.
     """
-    def __init__(self, values: np.ndarray, start_index: int, name: str = "signal"):
+    def __init__(self, values: np.ndarray, start_index: int, path: str, name: str = "signal"):
         self.values = np.asarray(values, dtype=float)
         self.start = int(start_index)
         self.name = name
+        self.path = path
 
     @classmethod
-    def from_dict(cls, samples_dict, name="signal"):
+    def from_dict(cls, samples_dict, path, name="signal"):
         """Create a Signal from dict {index: value}. Indices needn't be contiguous."""
         if not samples_dict:
             return cls(np.array([]), 0, name)
@@ -26,17 +29,30 @@ class Signal:
         arr = np.zeros(length, dtype=float)
         for i in indices:
             arr[i - start] = samples_dict[i]
-        return cls(arr, start, name)
+        return cls(arr, start, path, name)
 
     @classmethod
-    def from_file(cls, filename, name=None):
+    def from_files(cls, filenames: List[str], callback: Callable[[Union["Signal", Exception]], None]) -> List["Signal"]:
+        signals = []
+        for f in filenames:
+            try:
+                sig = cls.from_file(f)
+            except Exception as e:
+                callback(e)
+            else:
+                callback(sig)
+                signals.append(sig)
+        return signals
+    
+    @classmethod
+    def from_file(cls, filepath: str) -> "Signal":
         """
         Read file with format:
         First line: N (number of samples)
         Next N lines: index value
         """
         samples = {}
-        with open(filename, 'r') as f:
+        with open(filepath, 'r') as f:
             lines = [ln.strip() for ln in f if ln.strip() != ""]
         if not lines:
             raise ValueError("Empty file")
@@ -54,10 +70,8 @@ class Signal:
             idx = int(parts[0])
             val = float(parts[1])
             samples[idx] = val
-        if name is None:
-            import os
-            name = os.path.splitext(os.path.basename(filename))[0]
-        return cls.from_dict(samples, name=name)
+
+        return cls.from_dict(samples, filepath, name=os.path.splitext(os.path.basename(filepath))[0])
 
     def indices(self):
         if self.values.size == 0:
@@ -65,32 +79,33 @@ class Signal:
         return np.arange(self.start, self.start + self.values.size)
 
     def copy(self, name=None):
-        return Signal(self.values.copy(), self.start, name if name else self.name + "_copy")
+        new_name = name if name else self.name
+        return Signal(self.values.copy(), self.start, self.rename(new_name), new_name)
 
     def scaled(self, factor, name=None):
-        return Signal(self.values * factor, self.start, name if name else f"{self.name}_x{factor}")
-    
-
-
+        new_name = name if name else f"{self.name}_x{factor}"
+        return Signal(self.values * factor, self.start, self.rename(new_name), new_name)
     
     def shifted(self, k, name=None):
         # x(n - k) => advance by k (start increases by k), x(n + k) => delay by k (start decreases)
         # We'll implement shifting semantics so that calling shifted(k) returns x(n - k)
         # where k positive means advance (the samples move left in n).
         new_start = self.start - k
-        return Signal(self.values.copy(), new_start, name if name else f"{self.name}_shift_{k}")
+        new_name = name if name else f"{self.name}_shift_{k}"
+        return Signal(self.values.copy(), new_start, self.rename(new_name), new_name)
 
     def folded(self, name=None):
         # x(-n): reverse samples and change start index
+        new_name = name if name else f"{self.name}_fold"
         if self.values.size == 0:
-            return Signal(np.array([]), 0, name if name else f"{self.name}_fold")
+            return Signal(np.array([]), 0, self.rename(new_name), new_name)
         # original indices: start ... start+L-1
         L = self.values.size
         new_values = self.values[::-1].copy()
         # new start = - (old_end)
         old_end = self.start + L - 1
         new_start = -old_end
-        return Signal(new_values, new_start, name if name else f"{self.name}_fold")
+        return Signal(new_values, new_start, self.rename(new_name), new_name)
 
     @staticmethod
     def _align(sig1, sig2):
@@ -121,34 +136,56 @@ class Signal:
             a2[s:s + sig2.values.size] = sig2.values
         return a1, a2, full_start
 
-    @staticmethod
-    def add(signals, name="sum"):
-        """Add a list of signals and return a new Signal aligned correctly."""
-        if not signals:
-            return Signal(np.array([]), 0, name)
-        # compute global start and end
-        starts = [s.start for s in signals if s.values.size > 0]
-        ends = [s.start + s.values.size - 1 for s in signals if s.values.size > 0]
+    def add(self, signals: List["Signal"], name=None):
+        """Add the current signal to one or more signals and return a new aligned Signal."""
+        all_signals = [self, *signals]
+
+        if not name:
+            name = "_plus_".join(list(map(lambda x: x.name, all_signals)))
+
+        if not all_signals:
+            return Signal(np.array([]), 0, self.rename(name), name)
+
+        # Compute global start and end
+        starts = [s.start for s in all_signals if s.values.size > 0]
+        ends = [s.start + s.values.size - 1 for s in all_signals if s.values.size > 0]
         if not starts:
-            return Signal(np.array([]), 0, name)
+            return Signal(np.array([]), 0, self.rename(name), name)
+
         full_start = min(starts)
         full_end = max(ends)
         L = full_end - full_start + 1
         total = np.zeros(L, dtype=float)
-        for s in signals:
+
+        for s in all_signals:
             if s.values.size == 0:
                 continue
             idx = s.start - full_start
             total[idx:idx + s.values.size] += s.values
-        return Signal(total, full_start, name)
 
-    @staticmethod
-    def subtract(sig_a, sig_b, name=None):
-        """Compute sig_a - sig_b"""
+        return Signal(total, full_start, self.rename(name), name)
+
+    def subtract(self, other: "Signal", name=None):
+        """Subtract another signal from the current one and return a new aligned Signal."""
         if name is None:
-            name = f"{sig_a.name}_minus_{sig_b.name}"
-        a, b, full_start = Signal._align(sig_a, sig_b)
-        return Signal(a - b, full_start, name)
+            name = f"{self.name}_minus_{other.name}"
+
+        a, b, full_start = self._align(self, other)
+        return Signal(a - b, full_start, self.rename(name), name)
 
     def __str__(self):
         return f"{self.name}: start={self.start}, len={self.values.size}"
+    
+    def rename(self, new_name: str):
+        """Rename the file at self.path to the given new_name (in the same directory)."""
+        if not hasattr(self, "path") or not self.path:
+            raise ValueError("Signal has no valid path to rename.")
+
+        dir_path = os.path.dirname(self.path)
+        new_path = os.path.join(dir_path, new_name)
+
+        _, ext = os.path.splitext(self.path)
+        if not os.path.splitext(new_name)[1]:
+            new_path += ext
+
+        return new_path
