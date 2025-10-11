@@ -5,11 +5,12 @@
 import os
 import sys
 from typing import List, Union
+import uuid
 import numpy as np
-from PySide6 import QtWidgets, QtCore
+from PySide6 import QtWidgets, QtCore, QtGui
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QMessageBox,
-    QListWidgetItem, QInputDialog, QLineEdit
+    QListWidgetItem, QInputDialog, QLineEdit, QMenu, QSystemTrayIcon
 )
 from my_signal import Signal
 from matplot_canvas import MplCanvas
@@ -30,10 +31,16 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Discrete Signal Tool")
         self.resize(1000, 600)
 
+        # data store
+        self.signals: List[Signal] = []
+
         # central widget and layout
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         main_layout = QtWidgets.QHBoxLayout(central)
+
+        # Initialize Menu Bar
+        self._create_menu_bar()
 
         # Left panel: controls and list
         left_panel = QtWidgets.QVBoxLayout()
@@ -45,8 +52,6 @@ class MainWindow(QMainWindow):
         # Buttons
         btn_layout = QtWidgets.QGridLayout()
         self.btn_load = QtWidgets.QPushButton("Load signal from file")
-        self.btn_plot = QtWidgets.QPushButton("Plot selected")
-        self.btn_plot_all = QtWidgets.QPushButton("Plot all")
         self.btn_add = QtWidgets.QPushButton("Add selected -> new")
         self.btn_scale = QtWidgets.QPushButton("Multiply selected by const")
         self.btn_sub = QtWidgets.QPushButton("Subtract (A - B)")
@@ -54,14 +59,12 @@ class MainWindow(QMainWindow):
         self.btn_fold = QtWidgets.QPushButton("Fold selected")
         self.btn_delete = QtWidgets.QPushButton("Delete selected")
         btn_layout.addWidget(self.btn_load, 0, 0)
-        btn_layout.addWidget(self.btn_plot, 0, 1)
-        btn_layout.addWidget(self.btn_plot_all, 1, 0)
-        btn_layout.addWidget(self.btn_add, 1, 1)
-        btn_layout.addWidget(self.btn_scale, 2, 0)
-        btn_layout.addWidget(self.btn_sub, 2, 1)
-        btn_layout.addWidget(self.btn_shift, 3, 0)
-        btn_layout.addWidget(self.btn_fold, 3, 1)
-        btn_layout.addWidget(self.btn_delete, 4, 0)
+        btn_layout.addWidget(self.btn_add, 0, 1)
+        btn_layout.addWidget(self.btn_scale, 1, 0)
+        btn_layout.addWidget(self.btn_sub, 1, 1)
+        btn_layout.addWidget(self.btn_shift, 2, 0)
+        btn_layout.addWidget(self.btn_fold, 2, 1)
+        btn_layout.addWidget(self.btn_delete, 3, 0)
         left_panel.addLayout(btn_layout)
 
         # Save/export buttons (future extension)
@@ -70,17 +73,12 @@ class MainWindow(QMainWindow):
 
         # Right panel: plot area
         right_panel = QtWidgets.QVBoxLayout()
-        self.canvas = MplCanvas(self, dpi=100)
+        self.canvas = MplCanvas(self)
         right_panel.addWidget(self.canvas)
         main_layout.addLayout(right_panel, 1)
 
-        # data store
-        self.signals: List[Signal] = []
-
         # Connect signals
         self.btn_load.clicked.connect(self.load_signals)
-        self.btn_plot.clicked.connect(self.plot_selected)
-        self.btn_plot_all.clicked.connect(self.plot_all)
         self.btn_add.clicked.connect(self.add_selected)
         self.btn_scale.clicked.connect(self.scale_selected)
         self.btn_sub.clicked.connect(self.subtract_selected)
@@ -88,6 +86,127 @@ class MainWindow(QMainWindow):
         self.btn_fold.clicked.connect(self.fold_selected)
         self.btn_delete.clicked.connect(self.delete_selected)
         self.list_widget.itemDoubleClicked.connect(self.rename_item)
+
+
+    def _create_menu_bar(self):
+        menu_bar = self.menuBar()
+        
+        # --- Create Menu ---
+        create_menu = menu_bar.addMenu("Create")
+
+        # Signal Generation submenu
+        signal_menu = QMenu("Signal Generation", self)
+        sine_action = QtGui.QAction("Sine Wave", self)
+        cosine_action = QtGui.QAction("Cosine Wave", self)
+
+        signal_menu.addAction(sine_action)
+        signal_menu.addAction(cosine_action)
+        create_menu.addMenu(signal_menu)
+
+        sine_action.triggered.connect(lambda: self._generate_signal("sine"))
+        cosine_action.triggered.connect(lambda: self._generate_signal("cosine"))
+        
+        # --- Tools Menu ---
+        tools_menu = menu_bar.addMenu("Tools")
+
+        # Mode Menu
+        mode_menu = QMenu("Mode", self)
+
+        self.continuous_action = QtGui.QAction("Continuous", self)
+        self.discrete_action = QtGui.QAction("Discrete", self)
+
+        self.continuous_action.setCheckable(True)
+        self.discrete_action.setCheckable(True)
+
+        mode_group = QtGui.QActionGroup(self)
+        mode_group.addAction(self.continuous_action)
+        mode_group.addAction(self.discrete_action)
+        mode_group.setExclusive(True)
+
+        self.continuous_action.setChecked(True)
+
+        mode_menu.addAction(self.continuous_action)
+        mode_menu.addAction(self.discrete_action)
+
+        tools_menu.addMenu(mode_menu)
+
+        # Plot Menu
+        plot_menu = QMenu("Plot", self)
+        
+        self.plot_selected_action = QtGui.QAction("Selected", self)
+        self.plot_all_action = QtGui.QAction("All", self)
+
+        plot_menu.addAction(self.plot_selected_action)
+        plot_menu.addAction(self.plot_all_action)
+        
+        tools_menu.addMenu(plot_menu)
+
+        self.plot_selected_action.triggered.connect(lambda:self.plot_selected(self.signals))
+        self.plot_all_action.triggered.connect(lambda: self.plot_all(self.signals))
+
+    # -------------------------
+    # Signal generation
+    # -------------------------
+    def _generate_signal(self, signal_type: str):
+        """Prompt user for parameters and generate sine/cosine signal."""
+        try:
+            A, ok = QInputDialog.getDouble(self, "Amplitude", "Enter amplitude (A):", 1.0, 0.0)
+            if not ok: return
+
+            D, ok = QInputDialog.getDouble(self, "Y-Offset", "Enter offset (D):", 0.0)
+            if not ok: return
+
+            theta, ok = QInputDialog.getDouble(self, "Phase Shift", "Enter phase shift (θ in radians):", 0.0)
+            if not ok: return
+
+            f, ok = QInputDialog.getDouble(self, "Analog Frequency", "Enter analog frequency (Hz):", 5.0, 0.1)
+            if not ok: return
+
+            fs, ok = QInputDialog.getDouble(self, "Sampling Frequency", "Enter sampling frequency (Hz):", 50.0, 0.1)
+            if not ok: return
+
+            # --- Nyquist Theorem Validation ---
+            if fs < 2 * f:
+                QMessageBox.warning(
+                    self,
+                    "Sampling Error",
+                    f"Sampling frequency must be at least twice the maximum frequency (fs >= 2f).\n"
+                    f"Current: fs = {fs}, 2f = {2*f}",
+                )
+                return
+
+            # --- Generate signal ---
+            t = np.arange(0, 1, 1/fs)  # 1-second duration
+            if signal_type == "sine":
+                y = A * np.sin(2 * np.pi * f * t + theta) + D
+            else:
+                y = A * np.cos(2 * np.pi * f * t + theta) + D
+
+            file_name = f"{signal_type}_{A}A_{f}Hz_{D}D_{uuid.uuid4()}.txt"
+            created_signal = Signal(y, D, os.path.join(os.getcwd(), file_name), file_name)
+
+            self.add_signal_to_list(created_signal)
+            self.refresh_list_items()
+
+            confirm = QMessageBox.information(
+                self,
+                "Signal Created",
+                (
+                    f"{file_name}\nSamples: {len(y)}\n\n"
+                    "Would you like to plot this signal?"
+                ),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+
+            save_signal_to_file(f"{created_signal.name}.txt", created_signal)
+
+            if confirm == QMessageBox.StandardButton.No:
+                return
+            
+            self.plot_all([created_signal])
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
 
     # -------------------------
     # Utilities for list
@@ -143,22 +262,22 @@ class MainWindow(QMainWindow):
         
         self.add_signals_to_list(Signal.from_files(fnames, self.handle_signal_load))
 
-    def plot_selected(self):
+    def plot_selected(self, signals: List[Signal]):
         idxs = self.get_selected_indices()
         if not idxs:
             QMessageBox.information(self, "No selection", "Select one or more signals to plot.")
             return
-        s = [self.signals[i] for i in idxs]
+        s = [signals[i] for i in idxs]
         if len(s) == 1:
-            self.canvas.plot_signal(s[0])
+            self.canvas.plot_signal(s[0], self.discrete_action.isChecked())
         else:
-            self.canvas.plot_multiple(s)
+            self.canvas.plot_multiple(s, self.discrete_action.isChecked())
 
-    def plot_all(self):
-        if not self.signals:
+    def plot_all(self, signals: List[Signal]):
+        if not signals:
             QMessageBox.information(self, "No signals", "No loaded signals.")
             return
-        self.canvas.plot_multiple(self.signals)
+        self.canvas.plot_multiple(signals, self.discrete_action.isChecked())
 
     def add_selected(self):
         idxs = self.get_selected_indices()
