@@ -56,6 +56,7 @@ class MainWindow(QMainWindow):
         self.btn_scale = QtWidgets.QPushButton("Multiply selected by const")
         self.btn_sub = QtWidgets.QPushButton("Subtract (A - B)")
         self.btn_shift = QtWidgets.QPushButton("Delay/Advance selected")
+        self.btn_quant = QtWidgets.QPushButton("Quantize selected")
         self.btn_fold = QtWidgets.QPushButton("Fold selected")
         self.btn_delete = QtWidgets.QPushButton("Delete selected")
         btn_layout.addWidget(self.btn_load, 0, 0)
@@ -63,6 +64,7 @@ class MainWindow(QMainWindow):
         btn_layout.addWidget(self.btn_scale, 1, 0)
         btn_layout.addWidget(self.btn_sub, 1, 1)
         btn_layout.addWidget(self.btn_shift, 2, 0)
+        btn_layout.addWidget(self.btn_quant, 2, 2)
         btn_layout.addWidget(self.btn_fold, 2, 1)
         btn_layout.addWidget(self.btn_delete, 3, 0)
         left_panel.addLayout(btn_layout)
@@ -83,6 +85,7 @@ class MainWindow(QMainWindow):
         self.btn_scale.clicked.connect(self.scale_selected)
         self.btn_sub.clicked.connect(self.subtract_selected)
         self.btn_shift.clicked.connect(self.shift_selected)
+        self.btn_quant.clicked.connect(self.quantize_selected)
         self.btn_fold.clicked.connect(self.fold_selected)
         self.btn_delete.clicked.connect(self.delete_selected)
         self.list_widget.itemDoubleClicked.connect(self.rename_item)
@@ -367,6 +370,51 @@ class MainWindow(QMainWindow):
         
         save_signal_to_file(f"{res.name}.txt", res)
         QMessageBox.information(self, "Saved", f"Folding result saved to {res.name}.txt")
+
+    def quantize_selected(self):
+        idxs = self.get_selected_indices()
+        if len(idxs) != 1:
+            QMessageBox.information(self, "Select one", "Select a single signal to quantize.")
+            return
+        sig: Signal = self.signals[idxs[0]]
+
+        # Ask user whether to enter bits or levels
+        choice, ok = QInputDialog.getItem(self, "Quantize Mode", "Choose input type:", ["bits", "levels"], 0, False)
+        if not ok:
+            return
+
+        if choice == "bits":
+            b_s, ok = QInputDialog.getInt(self, "Bits", "Enter number of bits:", 8, 1)
+            if not ok:
+                return
+            bits = int(b_s)
+            levels = None
+        else:
+            levels, ok = QInputDialog.getInt(self, "Levels", "Enter number of quantization levels:", 256, 2)
+            if not ok:
+                return
+            bits = None
+
+        try:
+            q, e, enc = sig.quantize(levels=levels, bits=bits, name=f"{sig.name}_quant")
+        except Exception as ex:
+            QMessageBox.critical(self, "Quantization error", str(ex))
+            return
+
+        # Add to list and save files
+        self.add_signal_to_list(q)
+        self.add_signal_to_list(e)
+        self.add_signal_to_list(enc)
+        self.refresh_list_items()
+
+        save_signal_to_file(f"{q.name}.txt", q)
+        save_signal_to_file(f"{e.name}.txt", e)
+        save_signal_to_file(f"{enc.name}.txt", enc)
+
+        QMessageBox.information(self, "Saved", f"Quantized, error and encoded signals saved as {q.name}.txt, {e.name}.txt, {enc.name}.txt")
+
+        # Plot: quantized and error and encoded
+        self.canvas.plot_multiple([q, e, enc], self.discrete_action.isChecked())
 
     def delete_selected(self):
         idxs = sorted(self.get_selected_indices(), reverse=True)

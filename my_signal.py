@@ -173,6 +173,65 @@ class Signal:
         a, b, full_start = self._align(self, other)
         return Signal(a - b, full_start, self.rename(name), name)
 
+    def quantize(self, levels: int = None, bits: int = None, name: str = None):
+        """
+        Uniform mid-rise quantization.
+
+        Provide either `levels` (number of quantization levels) or `bits`.
+        If `bits` is given, levels = 2**bits.
+
+        Returns a tuple of Signals: (quantized_signal, error_signal, encoded_signal)
+        - quantized_signal: values mapped to reconstruction levels
+        - error_signal: original - quantized
+        - encoded_signal: integer code (0..levels-1) as a signal
+        """
+        if levels is None and bits is None:
+            raise ValueError("Either levels or bits must be provided for quantization.")
+        if bits is not None:
+            if bits < 1:
+                raise ValueError("bits must be >= 1")
+            levels = 2 ** bits
+        if levels is None or levels < 2:
+            raise ValueError("levels must be an integer >= 2")
+
+        x = self.values
+        if x.size == 0:
+            # empty signals -> return empty signals with appropriate names
+            q_name = name if name else f"{self.name}_quant_L{levels}"
+            q = Signal(np.array([]), 0, self.rename(q_name), q_name)
+            e = Signal(np.array([]), 0, self.rename(q_name + "_err"), q_name + "_err")
+            enc = Signal(np.array([]), 0, self.rename(q_name + "_enc"), q_name + "_enc")
+            return q, e, enc
+
+        xmin = float(np.min(x))
+        xmax = float(np.max(x))
+
+        # If constant signal, quantized = original, error 0, encoded 0
+        if xmax == xmin:
+            q_vals = x.copy()
+            err_vals = np.zeros_like(x)
+            enc_vals = np.zeros_like(x, dtype=int)
+        else:
+            # step size (range divided by number of levels)
+            Delta = (xmax - xmin) / float(levels)
+            # map to level indices k in [0, levels-1]
+            # k = floor((x - xmin) / Delta), but ensure xmax maps to levels-1
+            k = np.floor((x - xmin) / Delta).astype(int)
+            # handle edge where x == xmax -> floor gives levels, clamp to levels-1
+            k = np.where(k >= levels, levels - 1, k)
+            k = np.where(k < 0, 0, k)
+            # mid-rise reconstruction level: xmin + (k + 0.5)*Delta
+            q_vals = xmin + (k.astype(float) + 0.5) * Delta
+            err_vals = x - q_vals
+            enc_vals = k.astype(int)
+
+        q_name = name if name else f"{self.name}_quant_L{levels}"
+        q = Signal(q_vals, self.start, self.rename(q_name), q_name)
+        e = Signal(err_vals, self.start, self.rename(q_name + "_err"), q_name + "_err")
+        enc = Signal(enc_vals.astype(float), self.start, self.rename(q_name + "_enc"), q_name + "_enc")
+
+        return q, e, enc
+
     def __str__(self):
         return f"{self.name}: start={self.start}, len={self.values.size}"
     
