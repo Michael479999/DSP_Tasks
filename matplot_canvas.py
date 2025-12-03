@@ -91,19 +91,20 @@ class MplCanvas(FigureCanvasQTAgg):
     @classmethod
     def plot_frequency_domain(_, signal: 'Signal', sampling_freq: float):
         """Plot the frequency domain representation of a signal."""
-        frequencies, magnitude, phase = signal.get_magnitude_and_phase_spectrum(sampling_freq)
-        
+        magnitudes, phases = signal.get_magnitude_and_phase_spectrum(sampling_freq)
+        frequencies = np.linspace(0, sampling_freq, len(magnitudes))
+
         _, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
         
         # Magnitude spectrum
-        ax1.stem(frequencies, magnitude, basefmt=' ')
+        ax1.stem(frequencies, magnitudes, basefmt=' ')
         ax1.set_xlabel('Frequency (Hz)')
         ax1.set_ylabel('Magnitude')
         ax1.set_title(f'Magnitude Spectrum of {signal.name}')
         ax1.grid(True, alpha=0.3)
         
         # Phase spectrum
-        ax2.stem(frequencies, phase, basefmt=' ')
+        ax2.stem(frequencies, phases, basefmt=' ')
         ax2.set_xlabel('Frequency (Hz)')
         ax2.set_ylabel('Phase (radians)')
         ax2.set_title(f'Phase Spectrum of {signal.name}')

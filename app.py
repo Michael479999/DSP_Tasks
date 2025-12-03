@@ -58,7 +58,7 @@ class MainWindow(QMainWindow):
         self.btn_shift = QtWidgets.QPushButton("Shift")
         self.btn_fold = QtWidgets.QPushButton("Fold")
         self.btn_quant = QtWidgets.QPushButton("Quantize")
-        self.btn_fourier = QtWidgets.QPushButton("Apply Fourier")
+        self.btn_fourier = QtWidgets.QPushButton("Fourier")
         self.btn_inverse_fourier = QtWidgets.QPushButton("Inverse Fourier")
         self.btn_moving_avg = QtWidgets.QPushButton("Moving Avg")
         self.btn_derivative = QtWidgets.QPushButton("Derivative")
@@ -124,7 +124,7 @@ class MainWindow(QMainWindow):
         self.btn_fold.clicked.connect(self.fold_selected)
         self.btn_quant.clicked.connect(self.quantize_selected)
         self.btn_fourier.clicked.connect(lambda: self.apply_fourier())
-        self.btn_inverse_fourier.clicked.connect(lambda: self.apply_fourier(inverse=True))
+        self.btn_inverse_fourier.clicked.connect(lambda: self.apply_fourier(idft=True))
         self.btn_moving_avg.clicked.connect(self.moving_avg_selected)
         self.btn_derivative.clicked.connect(self.derivative_selected)
         self.btn_convolve.clicked.connect(self.convolve_selected)
@@ -255,7 +255,7 @@ class MainWindow(QMainWindow):
     # -------------------------
     def add_signal_to_list(self, sig: Signal):
         self.signals.append(sig)
-        item = QListWidgetItem(f"{sig.name}  (start={sig.start if not sig.is_frequency_domain else 0}, len={sig.values.size})")
+        item = QListWidgetItem(f"{sig.name}  (start={sig.start}, len={sig.values.size})")
         item.setData(QtCore.Qt.ItemDataRole.UserRole, len(self.signals) - 1)  # index in self.signals
         self.list_widget.addItem(item)
     
@@ -455,14 +455,23 @@ class MainWindow(QMainWindow):
         # Plot: quantized and error and encoded
         self.canvas.plot_multiple([q, e, enc], self.discrete_action.isChecked())
 
-    def apply_fourier(self, inverse: bool = False):
+    def apply_fourier(self, idft: bool=False):
         idxs = self.get_selected_indices()
         if len(idxs) != 1:
             QMessageBox.information(self, "Select one", "Select a single signal to transform.")
             return
         
         sig: Signal = self.signals[idxs[0]]
-        res = sig.fourier(inverse=inverse)
+        
+        if idft and not sig.is_frequency_domain:
+            QMessageBox.information(self, "Not in frequency domain", "Selected signal is not in frequency domain. Please apply Fourier Transform first.")
+            return
+        
+        if not idft and sig.is_frequency_domain:
+            QMessageBox.information(self, "Already in frequency domain", "Selected signal is already in frequency domain.")
+            return
+        
+        res = sig.fourier(idft=idft)
         
         self.add_signal_to_list(res)
         self.refresh_list_items()
@@ -470,13 +479,13 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Saved", f"Fourier result saved to current script directory as: {res.name}.txt\n", QMessageBox.StandardButton.Ok)
         self.canvas.plot_multiple([sig, res], self.discrete_action.isChecked())
         
-        if inverse:
-            return
+        if idft: return
         
         reply = QMessageBox.question(self, "Plotting Note", "Frequency and Phase plots are now available, Would you like to view them?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
         
-        if reply == QMessageBox.StandardButton.Yes:
-            self.display_magnitude_phase_spectrum(res)
+        if reply != QMessageBox.StandardButton.Yes: return
+        
+        self.display_magnitude_phase_spectrum(res)
 
     def display_magnitude_phase_spectrum(self, signal: Optional[Signal] = None):
         if signal is None:
