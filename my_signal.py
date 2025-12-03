@@ -4,7 +4,7 @@
 import os
 from typing import Any, Callable, List, Optional, Union
 import numpy as np
-
+import math
 
 class Signal:
     """
@@ -317,33 +317,30 @@ class Signal:
     def __str__(self):
         return f"{self.name}: start={self.start}, len={self.values.size}"
 
-    def fourier(self, inverse: bool = False):
+    def fourier(self, idft: bool = False):
         """
-        Compute DFT or IDFT of the signal using manual implementation.
+        Compute DFT | IDFT of the signal using manual implementation.
         """
-        new_name = f"{self.name}_{'idft' if inverse else 'dft'}"
+        new_name = f"{self.name}_{'idft' if idft else 'dft'}"
         
         if self.values.size == 0:
-            return Signal(np.array([]), 0, new_name)
+            return Signal(np.array([]), 0, new_name, not idft)
         
         N = self.values.size
-        x = self.values
         
         # Compute DFT/IDFT manually (smart implementation for both)
-        scale = 1 / N if inverse else 1
-        sign = 1 if inverse else -1
+        sign = 1 if idft else -1
         
         X = np.zeros(N, dtype=complex)
         for k in range(N):
             for n in range(N):
-                X[k] += x[n] * np.exp(sign * 2j * np.pi * k * n / N)
-            X[k] *= scale
+                X[k] += self.values[n] * np.exp(sign * 2j * np.pi * k * n / N)
+            X[k] = X[k] * (1 / N if idft else 1)
         
-        # For IDFT, result should be real-valued
-        if inverse:
+        if idft:
             X = np.real_if_close(X)
         
-        result_signal = Signal(X, self.start, new_name, is_freq_domain=(not inverse))
+        result_signal = Signal(X, self.start, new_name, not idft)
         return result_signal
     
     def get_magnitude_and_phase_spectrum(self, sampling_freq: float):
@@ -352,19 +349,14 @@ class Signal:
         """
         if self.values.size == 0:
             return np.array([]), np.array([])
-        
+
         X = self.values
         N = len(X)
-        magnitude = np.abs(X)
-        phase = np.angle(X)
         
-        # One-sided spectrum (only positive frequencies for real signals)
-        phase = phase[:N // 2 + 1]
-        magnitude = magnitude[:N // 2 + 1]
+        phases = np.array([math.atan2(X[i].imag, X[i].real) for i in range(N)])
+        magnitudes = np.array([math.sqrt(X[i].real**2 + X[i].imag**2) for i in range(N)])
         
-        magnitude[1:-1] *= 2  # Double the magnitude except DC and Nyquist
+        # phases = np.angle()
+        # magnitudes = np.abs()
         
-        if sampling_freq:
-            frequencies = np.linspace(0, sampling_freq / 2, len(magnitude))
-
-        return frequencies, magnitude, phase
+        return magnitudes, phases
