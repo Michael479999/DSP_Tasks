@@ -12,4 +12,7 @@ def save_signal(filename: str, sig: Signal, ext: str = "txt") -> None:
     with open(path, "w") as f:
         f.write(f"{len(sig.values)}\n")
         for i, v in zip(sig.indices(), sig.values):
-            f.write(f"{i} {v}\n")
+            if isinstance(v, complex):
+                f.write(f"{i} {v.real} {v.imag}\n")
+            else:
+                f.write(f"{i} {v}\n")

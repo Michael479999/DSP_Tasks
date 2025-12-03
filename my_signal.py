@@ -11,13 +11,14 @@ class Signal:
     Represents a discrete-time signal as a numpy array with a start index n0.
     If samples correspond to indices n0 ... n0 + len(values) - 1.
     """
-    def __init__(self, values: np.ndarray, start_index: int, name: str = "signal"):
-        self.values = np.asarray(values, dtype=float)
+    def __init__(self, values: np.ndarray, start_index: int, name: str = "signal", is_freq_domain: bool = False):
+        self.values = values
         self.start = int(start_index)
         self.name = name
+        self.is_frequency_domain = is_freq_domain
 
     @classmethod
-    def from_dict(cls, samples_dict, name="signal"):
+    def from_dict(cls, samples_dict, is_freq_domain: bool = False, name="signal"):
         """Create a Signal from dict {index: value}. Indices needn't be contiguous."""
         if not samples_dict:
             return cls(np.array([]), 0, name)
@@ -25,10 +26,10 @@ class Signal:
         start = indices[0]
         end = indices[-1]
         length = end - start + 1
-        arr = np.zeros(length, dtype=float)
+        arr = np.zeros(length, dtype=float if not is_freq_domain else complex)
         for i in indices:
             arr[i - start] = samples_dict[i]
-        return cls(arr, start, name)
+        return cls(arr, start, name, is_freq_domain)
 
     @classmethod
     def from_files(cls, filenames: List[str], callback: Callable[[Union["Signal", Exception]], None]) -> List["Signal"]:
@@ -48,29 +49,47 @@ class Signal:
         """
         Read file with format:
         First line: N (number of samples)
-        Next N lines: index value
+        Next N lines:
+            (index value) OR (index real imaginary)
         """
         samples = {}
+
         with open(filepath, 'r') as f:
             lines = [ln.strip() for ln in f if ln.strip() != ""]
+
         if not lines:
             raise ValueError("Empty file")
+
         try:
             N = int(lines[0])
         except:
             raise ValueError("First line must be integer N (number of samples)")
+
         if len(lines) - 1 < N:
-            raise ValueError(f"File says {N} samples but only {len(lines) - 1} data lines found.")
+            raise ValueError(f"File says {N} samples but only {len(lines)-1} data lines found.")
+        
+        is_freq_domain = False
+        
         for i in range(N):
             line = lines[1 + i]
             parts = line.split()
+
             if len(parts) < 2:
-                raise ValueError(f"Line {i+2} is not 'index value'")
+                raise ValueError(f"Line {i+2} is not valid: needs at least 'index value'.")
+
             idx = int(parts[0])
-            val = float(parts[1])
+
+            if len(parts) == 2:
+                val = float(parts[1])
+            elif len(parts) == 3:
+                is_freq_domain = True
+                val = complex(float(parts[1]), float(parts[2]))
+            else:
+                raise ValueError(f"Line {i+2} must be 'i v' or 'i real imag'.")
+
             samples[idx] = val
 
-        return cls.from_dict(samples, name=os.path.splitext(os.path.basename(filepath))[0])
+        return cls.from_dict(samples, is_freq_domain, name=os.path.splitext(os.path.basename(filepath))[0])
 
     def indices(self):
         if self.values.size == 0:
@@ -279,12 +298,73 @@ class Signal:
         if self.values.size == 0 or other.values.size == 0:
             new_name = name if name else f"{self.name}_conv_{other.name}"
             return Signal(np.array([]), 0, new_name)
+        
+        # Array method
+        _product = [[x * y for x in self.values] for y in other.values]
+        n, m = len(self.values), len(other.values)
+        conv_values = [0] * (n + m - 1) # Result length
 
-        conv_values = np.convolve(self.values, other.values)
+        # Sum along diagonals
+        for i in range(m):
+            for j in range(n):
+                conv_values[i + j] += _product[i][j]
+
+        # conv_values = np.convolve(self.values, other.values)
         new_start = self.start + other.start
         new_name = name if name else f"{self.name}_conv_{other.name}"
-        return Signal(conv_values, new_start, new_name)
+        return Signal(np.asarray(conv_values, dtype=float), new_start, new_name)
 
     def __str__(self):
         return f"{self.name}: start={self.start}, len={self.values.size}"
 
+    def fourier(self, inverse: bool = False):
+        """
+        Compute DFT or IDFT of the signal using manual implementation.
+        """
+        new_name = f"{self.name}_{'idft' if inverse else 'dft'}"
+        
+        if self.values.size == 0:
+            return Signal(np.array([]), 0, new_name)
+        
+        N = self.values.size
+        x = self.values
+        
+        # Compute DFT/IDFT manually (smart implementation for both)
+        scale = 1 / N if inverse else 1
+        sign = 1 if inverse else -1
+        
+        X = np.zeros(N, dtype=complex)
+        for k in range(N):
+            for n in range(N):
+                X[k] += x[n] * np.exp(sign * 2j * np.pi * k * n / N)
+            X[k] *= scale
+        
+        # For IDFT, result should be real-valued
+        if inverse:
+            X = np.real_if_close(X)
+        
+        result_signal = Signal(X, self.start, new_name, is_freq_domain=(not inverse))
+        return result_signal
+    
+    def get_magnitude_and_phase_spectrum(self, sampling_freq: float):
+        """
+        Compute and return the magnitude spectrum (amplitude) of the signal.
+        """
+        if self.values.size == 0:
+            return np.array([]), np.array([])
+        
+        X = self.values
+        N = len(X)
+        magnitude = np.abs(X)
+        phase = np.angle(X)
+        
+        # One-sided spectrum (only positive frequencies for real signals)
+        phase = phase[:N // 2 + 1]
+        magnitude = magnitude[:N // 2 + 1]
+        
+        magnitude[1:-1] *= 2  # Double the magnitude except DC and Nyquist
+        
+        if sampling_freq:
+            frequencies = np.linspace(0, sampling_freq / 2, len(magnitude))
+
+        return frequencies, magnitude, phase

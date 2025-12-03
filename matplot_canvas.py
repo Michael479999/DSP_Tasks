@@ -20,6 +20,10 @@ class MplCanvas(FigureCanvasQTAgg):
             self.ax.set_title(f"{signal.name} (empty)")
             self.draw()
             return
+        
+        if signal.is_frequency_domain:
+            print(f"Skipping signal '{signal.name}' (is in frequency domain)")
+            return
 
         n = signal.indices()
         self.ax.set_title(signal.name)
@@ -62,6 +66,10 @@ class MplCanvas(FigureCanvasQTAgg):
         for s, color in zip(signals, colors):
             if s.values.size == 0:
                 continue
+            
+            if s.is_frequency_domain:
+                print(f"Skipping signal '{s.name}' (is in frequency domain)")
+                continue
 
             arr = np.zeros(n.size)
             idx = s.start - full_start
@@ -79,3 +87,28 @@ class MplCanvas(FigureCanvasQTAgg):
         self.ax.legend()
         self.ax.grid(True)
         self.draw()
+        
+    @classmethod
+    def plot_frequency_domain(_, signal: 'Signal', sampling_freq: float):
+        """Plot the frequency domain representation of a signal."""
+        frequencies, magnitude, phase = signal.get_magnitude_and_phase_spectrum(sampling_freq)
+        
+        _, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+        
+        # Magnitude spectrum
+        ax1.stem(frequencies, magnitude, basefmt=' ')
+        ax1.set_xlabel('Frequency (Hz)')
+        ax1.set_ylabel('Magnitude')
+        ax1.set_title(f'Magnitude Spectrum of {signal.name}')
+        ax1.grid(True, alpha=0.3)
+        
+        # Phase spectrum
+        ax2.stem(frequencies, phase, basefmt=' ')
+        ax2.set_xlabel('Frequency (Hz)')
+        ax2.set_ylabel('Phase (radians)')
+        ax2.set_title(f'Phase Spectrum of {signal.name}')
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+        
