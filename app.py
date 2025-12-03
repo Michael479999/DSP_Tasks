@@ -10,17 +10,18 @@ import numpy as np
 from PySide6 import QtWidgets, QtCore, QtGui
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QMessageBox,
-    QListWidgetItem, QInputDialog, QLineEdit, QMenu, QSystemTrayIcon
+    QListWidgetItem, QInputDialog, QLineEdit, QMenu
 )
+from base import get_file_path, save_signal
 from my_signal import Signal
 from matplot_canvas import MplCanvas
-from tests import (
-    AddSignalSamplesAreEqual,
-    SubSignalSamplesAreEqual,
-    MultiplySignalByConst,
-    ShiftSignalByConst,
-    Folding
-)
+# from tests import (
+#     AddSignalSamplesAreEqual,
+#     SubSignalSamplesAreEqual,
+#     MultiplySignalByConst,
+#     ShiftSignalByConst,
+#     Folding
+# )
 
 # -------------------------
 # Main Application Window
@@ -50,23 +51,49 @@ class MainWindow(QMainWindow):
         left_panel.addWidget(self.list_widget)
 
         # Buttons
-        btn_layout = QtWidgets.QGridLayout()
-        self.btn_load = QtWidgets.QPushButton("Load signal from file")
-        self.btn_add = QtWidgets.QPushButton("Add selected -> new")
-        self.btn_scale = QtWidgets.QPushButton("Multiply selected by const")
-        self.btn_sub = QtWidgets.QPushButton("Subtract (A - B)")
-        self.btn_shift = QtWidgets.QPushButton("Delay/Advance selected")
-        self.btn_quant = QtWidgets.QPushButton("Quantize selected")
-        self.btn_fold = QtWidgets.QPushButton("Fold selected")
-        self.btn_delete = QtWidgets.QPushButton("Delete selected")
-        btn_layout.addWidget(self.btn_load, 0, 0)
-        btn_layout.addWidget(self.btn_add, 0, 1)
-        btn_layout.addWidget(self.btn_scale, 1, 0)
-        btn_layout.addWidget(self.btn_sub, 1, 1)
-        btn_layout.addWidget(self.btn_shift, 2, 0)
-        btn_layout.addWidget(self.btn_quant, 2, 2)
-        btn_layout.addWidget(self.btn_fold, 2, 1)
-        btn_layout.addWidget(self.btn_delete, 3, 0)
+        btn_layout = QtWidgets.QVBoxLayout()
+        self.btn_add = QtWidgets.QPushButton("Add")
+        self.btn_sub = QtWidgets.QPushButton("Subtract")
+        self.btn_scale = QtWidgets.QPushButton("Multiply")
+        self.btn_shift = QtWidgets.QPushButton("Shift")
+        self.btn_fold = QtWidgets.QPushButton("Fold")
+        self.btn_quant = QtWidgets.QPushButton("Quantize")
+        self.btn_moving_avg = QtWidgets.QPushButton("Moving Avg")
+        self.btn_derivative = QtWidgets.QPushButton("Derivative")
+        self.btn_convolve = QtWidgets.QPushButton("Convolve")
+        self.btn_delete = QtWidgets.QPushButton("Delete")
+
+        # ===== Basic Operations Group =====
+        basic_group = QtWidgets.QGroupBox("Basic Operations")
+        basic_layout = QtWidgets.QGridLayout()
+        basic_layout.addWidget(self.btn_add, 0, 0)
+        basic_layout.addWidget(self.btn_sub, 0, 1)
+        basic_layout.addWidget(self.btn_scale, 1, 0)
+        basic_layout.addWidget(self.btn_delete, 1, 1)
+        basic_group.setLayout(basic_layout)
+
+        # ===== Transform Operations Group =====
+        transform_group = QtWidgets.QGroupBox("Transform Operations")
+        transform_layout = QtWidgets.QGridLayout()
+        transform_layout.addWidget(self.btn_shift, 0, 0)
+        transform_layout.addWidget(self.btn_fold, 0, 1)
+        transform_layout.addWidget(self.btn_quant, 1, 0)
+        transform_group.setLayout(transform_layout)
+
+        # ===== Advanced Operations Group =====
+        advanced_group = QtWidgets.QGroupBox("Advanced Operations")
+        advanced_layout = QtWidgets.QGridLayout()
+        advanced_layout.addWidget(self.btn_moving_avg, 0, 0)
+        advanced_layout.addWidget(self.btn_derivative, 0, 1)
+        advanced_layout.addWidget(self.btn_convolve, 1, 0)
+        advanced_group.setLayout(advanced_layout)
+
+        # ---- Add all groups to main btn_layout ----
+        btn_layout.addWidget(basic_group)
+        btn_layout.addWidget(transform_group)
+        btn_layout.addWidget(advanced_group)
+
+        # Add to left panel
         left_panel.addLayout(btn_layout)
 
         # Save/export buttons (future extension)
@@ -80,13 +107,15 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(right_panel, 1)
 
         # Connect signals
-        self.btn_load.clicked.connect(self.load_signals)
         self.btn_add.clicked.connect(self.add_selected)
-        self.btn_scale.clicked.connect(self.scale_selected)
         self.btn_sub.clicked.connect(self.subtract_selected)
+        self.btn_scale.clicked.connect(self.scale_selected)
         self.btn_shift.clicked.connect(self.shift_selected)
-        self.btn_quant.clicked.connect(self.quantize_selected)
         self.btn_fold.clicked.connect(self.fold_selected)
+        self.btn_quant.clicked.connect(self.quantize_selected)
+        self.btn_moving_avg.clicked.connect(self.moving_avg_selected)
+        self.btn_derivative.clicked.connect(self.derivative_selected)
+        self.btn_convolve.clicked.connect(self.convolve_selected)
         self.btn_delete.clicked.connect(self.delete_selected)
         self.list_widget.itemDoubleClicked.connect(self.rename_item)
 
@@ -94,26 +123,25 @@ class MainWindow(QMainWindow):
     def _create_menu_bar(self):
         menu_bar = self.menuBar()
         
+        # --- Load Menu ---
+        load_action = menu_bar.addAction("Load")
+        load_action.triggered.connect(self.load_signals)
+        
         # --- Create Menu ---
         create_menu = menu_bar.addMenu("Create")
 
         # Signal Generation submenu
-        signal_menu = QMenu("Signal Generation", self)
         sine_action = QtGui.QAction("Sine Wave", self)
         cosine_action = QtGui.QAction("Cosine Wave", self)
 
-        signal_menu.addAction(sine_action)
-        signal_menu.addAction(cosine_action)
-        create_menu.addMenu(signal_menu)
+        create_menu.addAction(sine_action)
+        create_menu.addAction(cosine_action)
 
         sine_action.triggered.connect(lambda: self._generate_signal("sine"))
         cosine_action.triggered.connect(lambda: self._generate_signal("cosine"))
         
-        # --- Tools Menu ---
-        tools_menu = menu_bar.addMenu("Tools")
-
-        # Mode Menu
-        mode_menu = QMenu("Mode", self)
+        # --- Mode Menu ---
+        mode_menu = menu_bar.addMenu("Mode")
 
         self.continuous_action = QtGui.QAction("Continuous", self)
         self.discrete_action = QtGui.QAction("Discrete", self)
@@ -131,18 +159,14 @@ class MainWindow(QMainWindow):
         mode_menu.addAction(self.continuous_action)
         mode_menu.addAction(self.discrete_action)
 
-        tools_menu.addMenu(mode_menu)
-
-        # Plot Menu
-        plot_menu = QMenu("Plot", self)
+        # --- Plot Menu ---
+        plot_menu = menu_bar.addMenu("Plot")
         
         self.plot_selected_action = QtGui.QAction("Selected", self)
         self.plot_all_action = QtGui.QAction("All", self)
 
         plot_menu.addAction(self.plot_selected_action)
         plot_menu.addAction(self.plot_all_action)
-        
-        tools_menu.addMenu(plot_menu)
 
         self.plot_selected_action.triggered.connect(lambda:self.plot_selected(self.signals))
         self.plot_all_action.triggered.connect(lambda: self.plot_all(self.signals))
@@ -185,8 +209,8 @@ class MainWindow(QMainWindow):
             else:
                 y = A * np.cos(2 * np.pi * f * t + theta) + D
 
-            file_name = f"{signal_type}_{A}A_{f}Hz_{D}D_{uuid.uuid4()}.txt"
-            created_signal = Signal(y, D, os.path.join(os.getcwd(), file_name), file_name)
+            file_name = f"{signal_type}_{A}A_{f}Hz_{D}D_{uuid.uuid4()}"
+            created_signal = Signal(y, D, file_name)
 
             self.add_signal_to_list(created_signal)
             self.refresh_list_items()
@@ -202,7 +226,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.No
             )
 
-            save_signal_to_file(f"{created_signal.name}.txt", created_signal)
+            save_signal(created_signal.name, created_signal)
 
             if confirm == QMessageBox.StandardButton.No:
                 return
@@ -292,8 +316,8 @@ class MainWindow(QMainWindow):
         self.add_signal_to_list(res)
         self.refresh_list_items()
         
-        save_signal_to_file(f"{res.name}.txt", res)
-        QMessageBox.information(self, "Saved", f"Addition result saved to {res.name}.txt")
+        save_signal(res.name, res)
+        QMessageBox.information(self, "Saved", f"Addition result saved to current script directory as: {res.name}.txt")
 
     def scale_selected(self):
         idxs = self.get_selected_indices()
@@ -316,8 +340,8 @@ class MainWindow(QMainWindow):
         self.add_signal_to_list(res)
         self.refresh_list_items()
         
-        save_signal_to_file(f"{res.name}.txt", res)
-        QMessageBox.information(self, "Saved", f"Multiply result saved to {res.name}.txt")
+        save_signal(res.name, res)
+        QMessageBox.information(self, "Saved", f"Multiply result saved to current script directory as: {res.name}.txt")
 
     def subtract_selected(self):
         idxs = self.get_selected_indices()
@@ -330,8 +354,8 @@ class MainWindow(QMainWindow):
         self.add_signal_to_list(res)
         self.refresh_list_items()
 
-        save_signal_to_file(f"{res.name}.txt", res)
-        QMessageBox.information(self, "Saved", f"Subtraction result saved to {res.name}.txt")
+        save_signal(res.name, res)
+        QMessageBox.information(self, "Saved", f"Subtraction result saved to current script directory as: {res.name}.txt")
 
     def shift_selected(self):
         idxs = self.get_selected_indices()
@@ -349,14 +373,14 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Bad k-step shift value", "k must be integer not equal to 0.")
             return
         
-        filename = f"{sig.name + "_advance_" + str(abs(k)) if k > 0 else sig.name + "_delay_" + str(abs(k))}.txt"
+        filename = f"{sig.name + "_advance_" + str(abs(k)) if k > 0 else sig.name + "_delay_" + str(abs(k))}"
 
         res = sig.shifted(k, name=filename)
         self.add_signal_to_list(res)
         self.refresh_list_items()
         
-        save_signal_to_file(filename, res)
-        QMessageBox.information(self, "Saved", f"Shift result saved to {filename}")
+        save_signal(filename, res)
+        QMessageBox.information(self, "Saved", f"Shift result saved to current script directory as: {filename}.txt")
 
     def fold_selected(self):
         idxs = self.get_selected_indices()
@@ -368,8 +392,8 @@ class MainWindow(QMainWindow):
         self.add_signal_to_list(res)
         self.refresh_list_items()
         
-        save_signal_to_file(f"{res.name}.txt", res)
-        QMessageBox.information(self, "Saved", f"Folding result saved to {res.name}.txt")
+        save_signal(res.name, res)
+        QMessageBox.information(self, "Saved", f"Folding result saved to current script directory as: {res.name}.txt")
 
     def quantize_selected(self):
         idxs = self.get_selected_indices()
@@ -396,7 +420,7 @@ class MainWindow(QMainWindow):
             bits = None
 
         try:
-            q, e, enc = sig.quantize(levels=levels, bits=bits, name=f"{sig.name}_quant")
+            q, e, enc = sig.quantize(levels=levels, bits=bits, name=f"{sig.name}_quantized")
         except Exception as ex:
             QMessageBox.critical(self, "Quantization error", str(ex))
             return
@@ -407,14 +431,79 @@ class MainWindow(QMainWindow):
         self.add_signal_to_list(enc)
         self.refresh_list_items()
 
-        save_signal_to_file(f"{q.name}.txt", q)
-        save_signal_to_file(f"{e.name}.txt", e)
-        save_signal_to_file(f"{enc.name}.txt", enc)
+        save_signal(q.name, q)
+        save_signal(e.name, e)
+        save_signal(enc.name, enc)
 
-        QMessageBox.information(self, "Saved", f"Quantized, error and encoded signals saved as {q.name}.txt, {e.name}.txt, {enc.name}.txt")
+        QMessageBox.information(self, "Saved", f"Quantized, error and encoded signals saved to current script directory as: {q.name}.txt, {e.name}.txt, {enc.name}.txt")
 
         # Plot: quantized and error and encoded
         self.canvas.plot_multiple([q, e, enc], self.discrete_action.isChecked())
+
+    def moving_avg_selected(self):
+        try:
+            idxs = self.get_selected_indices()
+            assert len(idxs) == 1, "Select exactly one signal for moving average."
+            idx = idxs[0]
+            curr = self.signals[idx]
+            k_s, ok = QInputDialog.getInt(self, "Window size", "Enter window size:", 3, 1)
+            if not ok:
+                return
+            
+            k = int(k_s)
+            assert k > 0, "Window size must be positive."
+            res = curr.moving_avg(k)
+            
+            self.add_signal_to_list(res)
+            self.refresh_list_items()
+            save_signal(res.name, res)
+            
+            QMessageBox.information(self, "Saved", f"Moving average result saved to current script directory as: {res.name}.txt")
+            
+            self.canvas.plot_multiple([curr, res], self.discrete_action.isChecked())
+        except AssertionError as e:
+            QMessageBox.information(self, "Warning", str(e))
+    
+    def derivative_selected(self):
+        try:
+            idxs = self.get_selected_indices()
+            assert len(idxs) == 1, "Select exactly one signal for derivative."
+            idx = idxs[0]
+            curr = self.signals[idx]
+            
+            order, ok = QInputDialog.getInt(self, "Derivative Order", "Enter order (1 or 2):", 1, 1, 2)
+            if not ok:
+                return
+            
+            res = curr.derivative(order=order)
+            
+            self.add_signal_to_list(res)
+            self.refresh_list_items()
+            save_signal(res.name, res)
+            
+            QMessageBox.information(self, "Saved", f"Derivative result saved to current script directory as: {res.name}.txt")
+            
+            self.canvas.plot_multiple([curr, res], self.discrete_action.isChecked())
+        except AssertionError as e:
+            QMessageBox.information(self, "Warning", str(e))
+    def convolve_selected(self):
+        try:
+            idxs = self.get_selected_indices()
+            assert len(idxs) == 2, "Select exactly two signals for convolution."
+            idx1, idx2 = idxs[0], idxs[1]
+            sig1, sig2 = self.signals[idx1], self.signals[idx2]
+            
+            res = sig1.convolve(sig2)
+            
+            self.add_signal_to_list(res)
+            self.refresh_list_items()
+            save_signal(res.name, res)
+            
+            QMessageBox.information(self, "Saved", f"Convolution result saved to current script directory as: {res.name}.txt")
+            
+            self.canvas.plot_multiple([sig1, sig2, res], self.discrete_action.isChecked())
+        except AssertionError as e:
+            QMessageBox.information(self, "Warning", str(e))
 
     def delete_selected(self):
         idxs = sorted(self.get_selected_indices(), reverse=True)
@@ -441,17 +530,19 @@ class MainWindow(QMainWindow):
         deleted_count, failed = 0, []
 
         for i in idxs:
+            sig = self.signals[i]
+            file_path = get_file_path(sig.name)
+            
             try:
-                sig = self.signals[i]
-                if delete_from_disk and os.path.exists(sig.path):
+                if delete_from_disk and os.path.exists(file_path):
                     try:
-                        os.remove(sig.path)
+                        os.remove(file_path)
                     except Exception as e:
-                        failed.append((sig.name, str(e)))
+                        failed.append((file_path, str(e)))
                 del self.signals[i]
                 deleted_count += 1
             except Exception as e:
-                failed.append((getattr(sig, "name", f"Signal {i}"), str(e)))
+                failed.append((file_path, str(e)))
 
         self.refresh_list_items()
 
@@ -459,30 +550,24 @@ class MainWindow(QMainWindow):
             msg = f"{deleted_count} signal(s) removed.\n\nSome files could not be deleted:\n"
             msg += "\n".join([f"• {name}: {err}" for name, err in failed])
             QMessageBox.warning(self, "Partial Deletion", msg)
-        else:
-            msg_type = "and deleted from disk" if delete_from_disk else "from the list only"
-            QMessageBox.information(
-                self,
-                "Deletion Complete",
-                f"{deleted_count} signal(s) successfully removed {msg_type}."
-            )
+            return
+        msg_type = "and deleted from disk" if delete_from_disk else "from the list only"
+        QMessageBox.information(
+            self,
+            "Deletion Complete",
+            f"{deleted_count} signal(s) successfully removed {msg_type}."
+        )
 
     def rename_item(self, item):
         idx = item.data(QtCore.Qt.ItemDataRole.UserRole)
-        if idx is None:
-            return
+        if idx is None: return
+        
         sig = self.signals[idx]
         new_name, ok = QInputDialog.getText(self, "Rename", "New name:", QLineEdit.EchoMode.Normal, sig.name)
-        if ok and new_name.strip():
-            sig.name = new_name.strip()
-            self.refresh_list_items()
-
-
-def save_signal_to_file(filename, sig: Signal):
-    with open(filename, "w") as f:
-     f.write(f"{len(sig.values)}\n")
-     for i, v in zip(sig.indices(), sig.values):
-         f.write(f"{i} {v}\n")
+        if not ok or not new_name.strip(): return
+        
+        sig.name = new_name.strip()
+        self.refresh_list_items()
 
 def main():
     app = QApplication(sys.argv)

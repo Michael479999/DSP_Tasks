@@ -11,14 +11,13 @@ class Signal:
     Represents a discrete-time signal as a numpy array with a start index n0.
     If samples correspond to indices n0 ... n0 + len(values) - 1.
     """
-    def __init__(self, values: np.ndarray, start_index: int, path: str, name: str = "signal"):
+    def __init__(self, values: np.ndarray, start_index: int, name: str = "signal"):
         self.values = np.asarray(values, dtype=float)
         self.start = int(start_index)
         self.name = name
-        self.path = path
 
     @classmethod
-    def from_dict(cls, samples_dict, path, name="signal"):
+    def from_dict(cls, samples_dict, name="signal"):
         """Create a Signal from dict {index: value}. Indices needn't be contiguous."""
         if not samples_dict:
             return cls(np.array([]), 0, name)
@@ -29,7 +28,7 @@ class Signal:
         arr = np.zeros(length, dtype=float)
         for i in indices:
             arr[i - start] = samples_dict[i]
-        return cls(arr, start, path, name)
+        return cls(arr, start, name)
 
     @classmethod
     def from_files(cls, filenames: List[str], callback: Callable[[Union["Signal", Exception]], None]) -> List["Signal"]:
@@ -71,7 +70,7 @@ class Signal:
             val = float(parts[1])
             samples[idx] = val
 
-        return cls.from_dict(samples, filepath, name=os.path.splitext(os.path.basename(filepath))[0])
+        return cls.from_dict(samples, name=os.path.splitext(os.path.basename(filepath))[0])
 
     def indices(self):
         if self.values.size == 0:
@@ -80,11 +79,11 @@ class Signal:
 
     def copy(self, name=None):
         new_name = name if name else self.name
-        return Signal(self.values.copy(), self.start, self.rename(new_name), new_name)
+        return Signal(self.values.copy(), self.start, new_name)
 
     def scaled(self, factor, name=None):
         new_name = name if name else f"{self.name}_x{factor}"
-        return Signal(self.values * factor, self.start, self.rename(new_name), new_name)
+        return Signal(self.values * factor, self.start, new_name)
     
     def shifted(self, k, name=None):
         # x(n - k) => advance by k (start increases by k), x(n + k) => delay by k (start decreases)
@@ -92,20 +91,20 @@ class Signal:
         # where k positive means advance (the samples move left in n).
         new_start = self.start - k
         new_name = name if name else f"{self.name}_shift_{k}"
-        return Signal(self.values.copy(), new_start, self.rename(new_name), new_name)
+        return Signal(self.values.copy(), new_start, new_name)
 
     def folded(self, name=None):
         # x(-n): reverse samples and change start index
         new_name = name if name else f"{self.name}_fold"
         if self.values.size == 0:
-            return Signal(np.array([]), 0, self.rename(new_name), new_name)
+            return Signal(np.array([]), 0, new_name)
         # original indices: start ... start+L-1
         L = self.values.size
         new_values = self.values[::-1].copy()
         # new start = - (old_end)
         old_end = self.start + L - 1
         new_start = -old_end
-        return Signal(new_values, new_start, self.rename(new_name), new_name)
+        return Signal(new_values, new_start, new_name)
 
     @staticmethod
     def _align(sig1, sig2):
@@ -144,13 +143,13 @@ class Signal:
             name = "_plus_".join(list(map(lambda x: x.name, all_signals)))
 
         if not all_signals:
-            return Signal(np.array([]), 0, self.rename(name), name)
+            return Signal(np.array([]), 0, name)
 
         # Compute global start and end
         starts = [s.start for s in all_signals if s.values.size > 0]
         ends = [s.start + s.values.size - 1 for s in all_signals if s.values.size > 0]
         if not starts:
-            return Signal(np.array([]), 0, self.rename(name), name)
+            return Signal(np.array([]), 0, name)
 
         full_start = min(starts)
         full_end = max(ends)
@@ -163,7 +162,7 @@ class Signal:
             idx = s.start - full_start
             total[idx:idx + s.values.size] += s.values
 
-        return Signal(total, full_start, self.rename(name), name)
+        return Signal(total, full_start, name)
 
     def subtract(self, other: "Signal", name=None):
         """Subtract another signal from the current one and return a new aligned Signal."""
@@ -171,7 +170,7 @@ class Signal:
             name = f"{self.name}_minus_{other.name}"
 
         a, b, full_start = self._align(self, other)
-        return Signal(a - b, full_start, self.rename(name), name)
+        return Signal(a - b, full_start, name)
 
     def quantize(self, levels: int = None, bits: int = None, name: str = None):
         """
@@ -198,9 +197,9 @@ class Signal:
         if x.size == 0:
             # empty signals -> return empty signals with appropriate names
             q_name = name if name else f"{self.name}_quant_L{levels}"
-            q = Signal(np.array([]), 0, self.rename(q_name), q_name)
-            e = Signal(np.array([]), 0, self.rename(q_name + "_err"), q_name + "_err")
-            enc = Signal(np.array([]), 0, self.rename(q_name + "_enc"), q_name + "_enc")
+            q = Signal(np.array([]), 0, q_name)
+            e = Signal(np.array([]), 0, q_name + "_err")
+            enc = Signal(np.array([]), 0, q_name + "_enc")
             return q, e, enc
 
         xmin = float(np.min(x))
@@ -226,25 +225,66 @@ class Signal:
             enc_vals = k.astype(int)
 
         q_name = name if name else f"{self.name}_quant_L{levels}"
-        q = Signal(q_vals, self.start, self.rename(q_name), q_name)
-        e = Signal(err_vals, self.start, self.rename(q_name + "_err"), q_name + "_err")
-        enc = Signal(enc_vals.astype(float), self.start, self.rename(q_name + "_enc"), q_name + "_enc")
+        q = Signal(q_vals, self.start, q_name)
+        e = Signal(err_vals, self.start, q_name + "_err")
+        enc = Signal(enc_vals.astype(float), self.start, q_name + "_enc")
 
         return q, e, enc
 
+    def moving_avg(self, window_size: int, name: str = None):
+        """Compute the moving average of the signal with the given window size."""
+        if window_size < 1:
+            raise ValueError("window_size must be >= 1")
+        if self.values.size == 0:
+            new_name = name if name else f"{self.name}_movavg_{window_size}"
+            return Signal(np.array([]), 0, new_name)
+
+        cumsum = np.cumsum(np.insert(self.values, 0, 0)) 
+        mov_avg_values = (cumsum[window_size:] - cumsum[:-window_size]) / window_size
+
+        # self.start + (window_size - 1) // 2
+        new_name = name if name else f"{self.name}_movavg_{window_size}"
+        return Signal(mov_avg_values, self.start, new_name)
+
+    def derivative(self, name: str = None, order: int = 1):
+        """Compute the discrete-time derivative of the signal. Order can be 1 or 2."""
+        if self.values.size == 0:
+            new_name = name if name else f"{self.name}_deriv{order}"
+            return Signal(np.array([]), 0, new_name)
+
+        if order == 1:
+            # First Derivative: y(n) = x(n) - x(n-1)
+            deriv_values = np.diff(self.values)
+            # self.start + 1
+            new_start = self.start
+            new_name = name if name else f"{self.name}_deriv1"
+        elif order == 2:
+            # Second Derivative: y(n) = x(n+1) - 2*x(n) + x(n-1)
+            if self.values.size < 3:
+                new_name = name if name else f"{self.name}_deriv2"
+                return Signal(np.array([]), 0, new_name)
+            
+            # Compute: x(n+1) - 2*x(n) + x(n-1)
+            deriv_values = self.values[2:] - 2*self.values[1:-1] + self.values[:-2]
+            # self.start + 1
+            new_start = self.start
+            new_name = name if name else f"{self.name}_deriv2"
+        else:
+            raise ValueError("order must be 1 or 2")
+        
+        return Signal(deriv_values, new_start, new_name)
+    
+    def convolve(self, other: "Signal", name: str = None):
+        """Convolve the current signal with another signal."""
+        if self.values.size == 0 or other.values.size == 0:
+            new_name = name if name else f"{self.name}_conv_{other.name}"
+            return Signal(np.array([]), 0, new_name)
+
+        conv_values = np.convolve(self.values, other.values)
+        new_start = self.start + other.start
+        new_name = name if name else f"{self.name}_conv_{other.name}"
+        return Signal(conv_values, new_start, new_name)
+
     def __str__(self):
         return f"{self.name}: start={self.start}, len={self.values.size}"
-    
-    def rename(self, new_name: str):
-        """Rename the file at self.path to the given new_name (in the same directory)."""
-        if not hasattr(self, "path") or not self.path:
-            raise ValueError("Signal has no valid path to rename.")
 
-        dir_path = os.path.dirname(self.path)
-        new_path = os.path.join(dir_path, new_name)
-
-        _, ext = os.path.splitext(self.path)
-        if not os.path.splitext(new_name)[1]:
-            new_path += ext
-
-        return new_path
