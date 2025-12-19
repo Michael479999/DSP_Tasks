@@ -4,7 +4,7 @@
 
 import os
 import sys
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Union
 import uuid
 import numpy as np
 from PySide6 import QtWidgets, QtCore, QtGui
@@ -63,6 +63,7 @@ class MainWindow(QMainWindow):
         self.btn_moving_avg = QtWidgets.QPushButton("Moving Avg")
         self.btn_derivative = QtWidgets.QPushButton("Derivative")
         self.btn_convolve = QtWidgets.QPushButton("Convolve")
+        self.btn_correlate = QtWidgets.QPushButton("Correlate")
         self.btn_delete = QtWidgets.QPushButton("Delete")
 
         # ===== Basic Operations Group =====
@@ -95,6 +96,7 @@ class MainWindow(QMainWindow):
         advanced_layout.addWidget(self.btn_moving_avg, 0, 0)
         advanced_layout.addWidget(self.btn_derivative, 0, 1)
         advanced_layout.addWidget(self.btn_convolve, 1, 0)
+        advanced_layout.addWidget(self.btn_correlate, 1, 1)
         advanced_group.setLayout(advanced_layout)
 
         # ---- Add all groups to main btn_layout ----
@@ -127,7 +129,8 @@ class MainWindow(QMainWindow):
         self.btn_inverse_fourier.clicked.connect(lambda: self.apply_fourier(idft=True))
         self.btn_moving_avg.clicked.connect(self.moving_avg_selected)
         self.btn_derivative.clicked.connect(self.derivative_selected)
-        self.btn_convolve.clicked.connect(self.convolve_selected)
+        self.btn_convolve.clicked.connect(lambda: self.signal_convolution_correlation(_type="convolution"))
+        self.btn_correlate.clicked.connect(lambda: self.signal_convolution_correlation(_type="correlation"))
         self.btn_delete.clicked.connect(self.delete_selected)
         self.list_widget.itemDoubleClicked.connect(self.rename_item)
 
@@ -555,25 +558,26 @@ class MainWindow(QMainWindow):
             self.canvas.plot_multiple([curr, res], self.discrete_action.isChecked())
         except AssertionError as e:
             QMessageBox.information(self, "Warning", str(e))
-    def convolve_selected(self):
+    def signal_convolution_correlation(self, _type: Literal["convolution", "correlation"] = "convolution"):
         try:
             idxs = self.get_selected_indices()
-            assert len(idxs) == 2, "Select exactly two signals for convolution."
+            assert len(idxs) == 2, f"Select exactly two signals for {_type}."
             idx1, idx2 = idxs[0], idxs[1]
             sig1, sig2 = self.signals[idx1], self.signals[idx2]
             
-            res = sig1.convolve(sig2)
+            
+            res = sig1.convolve(sig2) if _type == 'convolution' else sig1.correlation(sig2)
             
             self.add_signal_to_list(res)
             self.refresh_list_items()
             save_signal(res.name, res)
             
-            QMessageBox.information(self, "Saved", f"Convolution result saved to current script directory as: {res.name}.txt")
+            QMessageBox.information(self, "Saved", f"{_type.title()} result saved to current script directory as: {res.name}.txt")
             
             self.canvas.plot_multiple([sig1, sig2, res], self.discrete_action.isChecked())
         except AssertionError as e:
             QMessageBox.information(self, "Warning", str(e))
-
+        
     def delete_selected(self):
         idxs = sorted(self.get_selected_indices(), reverse=True)
         if not idxs:

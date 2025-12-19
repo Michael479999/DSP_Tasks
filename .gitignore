@@ -4,3 +4,5 @@ Task 1 testcases and testing functions.rar
 __pycache__/
 .idea/
 .vscode/
+
+tests/
