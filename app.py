@@ -4,7 +4,7 @@
 
 import os
 import sys
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional, Tuple, Union
 import uuid
 import numpy as np
 from PySide6 import QtWidgets, QtCore, QtGui
@@ -33,7 +33,7 @@ class MainWindow(QMainWindow):
         self.resize(1000, 600)
 
         # data store
-        self.signals: List[Signal] = []
+        self.signals: Union[List[Signal], Tuple[List[Signal], str]] = []
 
         # central widget and layout
         central = QtWidgets.QWidget()
@@ -139,8 +139,16 @@ class MainWindow(QMainWindow):
         menu_bar = self.menuBar()
         
         # --- Load Menu ---
-        load_action = menu_bar.addAction("Load")
-        load_action.triggered.connect(self.load_signals)
+        load_menu = menu_bar.addMenu("Load")
+    
+        load_file_action = QtGui.QAction("From File(s)", self)
+        load_template_action = QtGui.QAction("From Template(s)", self)
+        
+        load_menu.addAction(load_file_action)
+        load_menu.addAction(load_template_action)
+        
+        load_file_action.triggered.connect(lambda: self.load_signals('files'))
+        load_template_action.triggered.connect(lambda: self.load_signals('templates'))
         
         # --- Create Menu ---
         create_menu = menu_bar.addMenu("Create")
@@ -256,14 +264,25 @@ class MainWindow(QMainWindow):
     # -------------------------
     # Utilities for list
     # -------------------------
-    def add_signal_to_list(self, sig: Signal):
+    def add_signal_to_list(self, sig: Union[Signal, List[Signal]], template_name: Optional[str]=None):
+        if template_name and isinstance(sig, list):
+            """If a template name is provided, add as a group of signals."""
+            self.signals.append((sig, template_name))
+            item = QListWidgetItem(f"{template_name}  (1st_start={sig[0].start}, 1st_len={sig[0].values.size})")
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, len(self.signals) - 1)  # index in self.signals
+            self.list_widget.addItem(item)
+            return
         self.signals.append(sig)
         item = QListWidgetItem(f"{sig.name}  (start={sig.start}, len={sig.values.size})")
         item.setData(QtCore.Qt.ItemDataRole.UserRole, len(self.signals) - 1)  # index in self.signals
         self.list_widget.addItem(item)
     
-    def add_signals_to_list(self, sigs: List[Signal]):
-        [self.add_signal_to_list(sig) for sig in sigs]
+    def add_signals_to_list(self, sigs: Union[List[Signal], Tuple[List[Signal], str]]):
+        if isinstance(sigs, tuple):
+            sigs, template_name = sigs
+            self.add_signal_to_list(sigs, template_name)
+        else:
+            [self.add_signal_to_list(sig) for sig in sigs]
 
     def refresh_list_items(self):
         self.list_widget.clear()
@@ -300,9 +319,27 @@ class MainWindow(QMainWindow):
         if ok and new_name.strip():
             result.name = new_name.strip()
 
-    def load_signals(self):
+    def load_signals(self, _type: Literal['files', 'templates'] = 'files'):
         fnames, _ = QFileDialog.getOpenFileNames(self, "Open signal file(s)", "", "Text files (*.txt);;All files (*)")
         if not fnames:
+            return
+        
+        if _type == 'templates':
+            """A Template is a group of Signals with a name for their group."""
+            """Enter template name for each selected template file."""
+            """No group name → load as regular signals."""
+            template_name, ok = QInputDialog.getText(
+                self,
+                "Template name",
+                "Enter name for template:",
+                QLineEdit.EchoMode.Normal,
+                os.path.splitext(os.path.basename(fnames[0]))[0]
+            )
+            if not ok or not template_name.strip():
+                self.add_signals_to_list(Signal.from_templates(fnames, self.handle_signal_load))
+                return
+            
+            self.add_signals_to_list((Signal.from_templates(fnames, self.handle_signal_load), template_name))
             return
         
         self.add_signals_to_list(Signal.from_files(fnames, self.handle_signal_load))
@@ -558,6 +595,36 @@ class MainWindow(QMainWindow):
             self.canvas.plot_multiple([curr, res], self.discrete_action.isChecked())
         except AssertionError as e:
             QMessageBox.information(self, "Warning", str(e))
+            
+    def handle_template_correlation(self, sig1: Union[Signal, Tuple[List[Signal], str]], sig2: Union[Signal, Tuple[List[Signal], str]]):
+        """Handle correlation when one of the signals is a template (group of signals)."""
+        if isinstance(sig1, tuple) and isinstance(sig2, tuple):
+            raise AssertionError("Convolution/Correlation between two templates is not supported.")
+        
+        if isinstance(sig1, tuple):
+            template_signals, template_name = sig1
+            target_signal = sig2
+        elif isinstance(sig2, tuple):
+            template_signals, template_name = sig2
+            target_signal = sig1
+        else:
+            raise ValueError("At least one signal must be a template for template correlation.")
+        
+        max_corr_values = []
+        for template_signal in template_signals:
+            max_corr_values.append(np.max(np.abs(target_signal.correlation(template_signal).values)))
+        
+        average_corr = np.mean(max_corr_values)
+        
+        QMessageBox.information(
+            self,
+            "Template Correlation",
+            f"Performed correlation with template '{template_name}' consisting of {len(template_signals)} signals.\n"
+            f"Average correlation: {average_corr}."
+        )
+        
+        return average_corr
+
     def signal_convolution_correlation(self, _type: Literal["convolution", "correlation"] = "convolution"):
         try:
             idxs = self.get_selected_indices()
@@ -565,6 +632,10 @@ class MainWindow(QMainWindow):
             idx1, idx2 = idxs[0], idxs[1]
             sig1, sig2 = self.signals[idx1], self.signals[idx2]
             
+            """Perform correlation between signal 1 or 2 and the template."""
+            if _type == 'correlation' and (isinstance(sig1, tuple) or isinstance(sig2, tuple)):
+                self.handle_template_correlation(sig1, sig2)
+                return
             
             res = sig1.convolve(sig2) if _type == 'convolution' else sig1.correlation(sig2)
             if _type == 'correlation':
