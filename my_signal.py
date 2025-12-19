@@ -2,7 +2,7 @@
 # Signal representation
 # -------------------------
 import os
-from typing import Any, Callable, List, Optional, Union
+from typing import Any, Callable, List, Literal, Optional, Union
 import numpy as np
 import math
 
@@ -293,8 +293,13 @@ class Signal:
         
         return Signal(deriv_values, new_start, new_name)
     
-    def convolve(self, other: "Signal", name: str = None):
-        """Convolve the current signal with another signal."""
+    def convolve(self, other: "Signal", name: str = None, mode: Literal['same', 'full'] = 'full'):
+        """Convolve the current signal with another signal.
+            Check mode:
+                'full' ->   return unchanged
+                'same' ->   Slice result to length len(self.values)
+                            Shift start index by (len(other.values) - 1) // 2
+        """
         if self.values.size == 0 or other.values.size == 0:
             new_name = name if name else f"{self.name}_conv_{other.name}"
             return Signal(np.array([]), 0, new_name)
@@ -309,10 +314,31 @@ class Signal:
             for j in range(n):
                 conv_values[i + j] += _product[i][j]
 
-        # conv_values = np.convolve(self.values, other.values)
-        new_start = self.start + other.start
+        # conv_values = np.convolve(self.values, other.values, mode='full')
+        full_result = np.asarray(conv_values, dtype=float)
+        if mode == 'same':
+            start_idx = other.values.size - 1
+            full_result = full_result[start_idx:start_idx + self.values.size]
+            new_start = self.start
+        else:
+            new_start = self.start + other.start
+            
         new_name = name if name else f"{self.name}_conv_{other.name}"
-        return Signal(np.asarray(conv_values, dtype=float), new_start, new_name)
+        return Signal(full_result, new_start, new_name)
+
+    def correlation(self, other: "Signal") -> "Signal":
+        """Compute the cross-correlation of the current signal with another signal."""
+        other_rev = Signal(other.values[::-1], -(other.start + other.values.size - 1), other.name, other.is_frequency_domain)
+        raw_correlation = self.convolve(other_rev, name=f"{self.name}_corr_{other_rev.name}", mode='same')
+        # actual = np.correlate(self.values, other.values, mode='same')
+        
+        # """Include only positive lags in the correlation result."""
+        # raw_correlation.values = raw_correlation.values[raw_correlation.values.size // 2:]
+        
+        factor = math.sqrt(np.sum(self.values**2) * np.sum(other.values**2))
+        normalized_correlation = np.divide(raw_correlation.values, factor)
+        return Signal(normalized_correlation, 0, raw_correlation.name, raw_correlation.is_frequency_domain)
+        
 
     def __str__(self):
         return f"{self.name}: start={self.start}, len={self.values.size}"
