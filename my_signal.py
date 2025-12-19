@@ -45,6 +45,46 @@ class Signal:
         return signals
     
     @classmethod
+    def from_templates(cls, filenames: List[str], callback: Callable[[Union["Signal", Exception]], None]) -> List["Signal"]:
+        signals = []
+        for f in filenames:
+            try:
+                sig = cls.from_template(f)
+            except Exception as e:
+                callback(e)
+            else:
+                callback(sig)
+                signals.append(sig)
+        return signals
+    
+    @classmethod
+    def from_template(cls, filepath: str) -> "Signal":
+        """
+        Read a signal template file with format:
+        N lines: 
+            value
+        """
+        samples = {}
+
+        with open(filepath, 'r') as f:
+            lines = [ln.strip() for ln in f if ln.strip() != ""]
+
+        if not lines:
+            raise ValueError("Empty file")
+
+        N = len(lines)
+        
+        for i in range(N):
+            parts = lines[i].strip().split()
+
+            if len(parts) != 1:
+                raise ValueError(f"Line {i+1} is not valid: needs 'value'.")
+            
+            samples[i] = float(parts[0])
+
+        return cls.from_dict(samples, is_freq_domain=False, name=os.path.splitext(os.path.basename(filepath))[0])
+    
+    @classmethod
     def from_file(cls, filepath: str) -> "Signal":
         """
         Read file with format:
