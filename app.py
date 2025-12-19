@@ -567,7 +567,25 @@ class MainWindow(QMainWindow):
             
             
             res = sig1.convolve(sig2) if _type == 'convolution' else sig1.correlation(sig2)
-            
+            if _type == 'correlation':
+                max_idx = Signal.argmax_abs(res.values)
+
+                # Convert index → lag
+                delay_samples = res.start + max_idx
+                sf, ok = QInputDialog.getDouble(self, "Sampling Frequency", "Enter sampling frequency (Hz):", 50.0, 0.1)
+                if not ok:
+                    return
+                if sf <= 0:
+                    raise ValueError("Sampling frequency must be positive")
+                
+                delay_time = delay_samples / sf
+                QMessageBox.information(
+                    self,
+                    "Delay Information",
+                    f"Maximum correlation at lag = {delay_samples} samples\n"
+                    f"Which corresponds to delay = {delay_time:.4f} seconds"
+                )
+
             self.add_signal_to_list(res)
             self.refresh_list_items()
             save_signal(res.name, res)

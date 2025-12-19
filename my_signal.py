@@ -337,8 +337,19 @@ class Signal:
         
         factor = math.sqrt(np.sum(self.values**2) * np.sum(other.values**2))
         normalized_correlation = np.divide(raw_correlation.values, factor)
-        return Signal(normalized_correlation, 0, raw_correlation.name, raw_correlation.is_frequency_domain)
-        
+        return Signal(normalized_correlation, raw_correlation.start, raw_correlation.name, raw_correlation.is_frequency_domain)
+
+    @staticmethod
+    def argmax_abs(arr):
+        max_val = abs(arr[0])
+        max_idx = 0
+
+        for i in range(1, len(arr)):
+            if abs(arr[i]) > max_val:
+                max_val = abs(arr[i])
+                max_idx = i
+
+        return max_idx
 
     def __str__(self):
         return f"{self.name}: start={self.start}, len={self.values.size}"
