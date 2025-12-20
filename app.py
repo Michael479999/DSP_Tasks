@@ -2,6 +2,7 @@
 # Requires: PySide6, matplotlib, numpy
 # pip install PySide6 matplotlib numpy
 
+import math
 import os
 import sys
 from typing import List, Literal, Optional, Tuple, Union
@@ -10,22 +11,16 @@ import numpy as np
 from PySide6 import QtWidgets, QtCore, QtGui
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QMessageBox,
-    QListWidgetItem, QInputDialog, QLineEdit, QMenu
+    QListWidgetItem, QInputDialog, QLineEdit
 )
 from base import get_file_path, save_signal
-from my_signal import Signal
+from my_signal import *
 from matplot_canvas import MplCanvas
-# from tests import (
-#     AddSignalSamplesAreEqual,
-#     SubSignalSamplesAreEqual,
-#     MultiplySignalByConst,
-#     ShiftSignalByConst,
-#     Folding
-# )
 
 # -------------------------
 # Main Application Window
 # -------------------------
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -154,12 +149,15 @@ class MainWindow(QMainWindow):
         create_menu = menu_bar.addMenu("Create")
 
         # Signal Generation submenu
+        filter_action = QtGui.QAction("Filter", self)
         sine_action = QtGui.QAction("Sine Wave", self)
         cosine_action = QtGui.QAction("Cosine Wave", self)
 
+        create_menu.addAction(filter_action)
         create_menu.addAction(sine_action)
         create_menu.addAction(cosine_action)
 
+        filter_action.triggered.connect(lambda: self._generate_filter())
         sine_action.triggered.connect(lambda: self._generate_signal("sine"))
         cosine_action.triggered.connect(lambda: self._generate_signal("cosine"))
         
@@ -258,6 +256,99 @@ class MainWindow(QMainWindow):
                 return
             
             self.plot_all([created_signal])
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+
+    def _generate_filter(self):
+        """Prompt user for filter parameters and generate filter signal."""
+        try:
+            simple_types = ["Low-pass", "High-pass"]
+            complex_types = ["Band-pass", "Band-stop"]
+            filter_types = simple_types + complex_types
+            
+            filter_type, ok = QInputDialog.getItem(self, "Filter Type", "Select filter type:", filter_types, 0, False)
+            if not ok:
+                return
+
+            cutoff_freqs, ok = QInputDialog.getText(
+                self,
+                "Cutoff Frequency/Frequencies",
+                "Enter cutoff frequency/frequencies (Hz) separated by comma:",
+                QLineEdit.EchoMode.Normal,
+                "10" if filter_type in simple_types else "5,15"
+            )
+            if not ok:
+                return
+
+            fs, ok = QInputDialog.getDouble(self, "Sampling Frequency", "Enter sampling frequency (Hz):", 50.0, 0.1)
+            if not ok:
+                return
+
+            cutoff_freqs = [float(cf.strip()) for cf in cutoff_freqs.split(",")]
+            if (filter_type in simple_types and len(cutoff_freqs) != 1) or (filter_type in complex_types and len(cutoff_freqs) != 2):
+                QMessageBox.critical(self, "Error", "Incorrect number of cutoff frequencies provided.")
+                return
+            
+            transition_width, ok = QInputDialog.getDouble(self, "Transition Width", "Enter transition width (Hz):", 2.0, 0.1)
+            if not ok:
+                return
+            
+            attenuation, ok = QInputDialog.getDouble(self, "Attenuation", "Enter attenuation (dB):", 60.0, 0.1)
+            if not ok:
+                return
+            
+            if attenuation < 21:
+                window_type = "rectangular"
+            elif attenuation < 44:
+                window_type = "hanning"
+            elif attenuation < 53:
+                window_type = "hamming"
+            elif attenuation < 75:
+                window_type = "blackman"
+            else:
+                raise ValueError("Attenuation too high for available window functions.")
+            
+            normalized_transition_width = transition_width / fs
+            
+            C, window = window_functions[window_type]
+            N = C / normalized_transition_width
+            
+            ceiled_N = math.ceil(N)
+            N = ceiled_N if ceiled_N % 2 != 0 else ceiled_N + 1
+            n = (N - 1) // 2 # always integer since N is odd
+            
+            window_values = window(N, n)
+            
+            normalized_cutoff_freqs = [(fc + (transition_width / 2)) / fs for fc in cutoff_freqs]
+            
+            filter = filters[filter_type]
+            
+            filter_values = filter(n, normalized_cutoff_freqs)
+            
+            h = filter_values * window_values
+            file_name = f"{filter_type.replace('-', '_').lower()}"
+            filter_signal = Signal(h, -n, file_name)
+            
+            self.add_signal_to_list(filter_signal)
+            self.refresh_list_items()
+            save_signal(filter_signal.name, filter_signal)
+            
+            confirm = QMessageBox.information(
+                self,
+                "Signal Created",
+                (
+                    f"{file_name}\n\n"
+                    "Would you like to plot this signal?"
+                ),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+
+            if confirm == QMessageBox.StandardButton.No:
+                return
+            
+            self.plot_all([filter_signal])
+            
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
