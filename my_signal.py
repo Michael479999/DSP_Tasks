@@ -13,7 +13,7 @@ def _hamming(N: int, n: int) -> np.ndarray:
     return 0.54 + 0.46 * np.cos(2 * np.pi * np.arange(-n, n + 1) / N)
 
 def _blackman(N: int, n: int) -> np.ndarray:
-    factor = np.pi * np.arange(-n, n + 1) / N - 1
+    factor = np.pi * np.arange(-n, n + 1) / (N - 1)
     return 0.42 + 0.5 * np.cos(2 * factor) + 0.08 * np.cos(4 * factor)
 
 def _pass_filter(n: int, fc: float, zero_value: Optional[float] = None):
@@ -31,21 +31,17 @@ def _lowpass(n: int, normalized_cutoff_freqs: List[float]):
 
 def _highpass(n: int, normalized_cutoff_freqs: List[float]):
     fc = normalized_cutoff_freqs[0]
-    filter = -_pass_filter(n, fc, zero_value=1 - 2 * fc)
-    return filter
+    return -_pass_filter(n, fc, zero_value=-(1 - 2 * fc))
 
 def _bandpass(n: int, normalized_cutoff_freqs: List[float]):
     fc1, fc2 = sorted(normalized_cutoff_freqs)
-    zero_value = 2 * (fc2 - fc1)
-    filter = _pass_filter(n, fc2, zero_value) - _pass_filter(n, fc1, zero_value)
-    return filter
+    return _pass_filter(n, fc2) - _pass_filter(n, fc1)
 
 def _bandstop(n: int, normalized_cutoff_freqs: List[float]):
     fc1, fc2 = sorted(normalized_cutoff_freqs)
-    zero_value = 1 - 2 * (fc2 - fc1)
-    filter = _pass_filter(n, fc1, zero_value) - _pass_filter(n, fc2, zero_value)
-    return filter
-
+    h = _pass_filter(n, fc1) - _pass_filter(n, fc2)
+    h[n] = 1 - 2 * (fc2 - fc1)
+    return h
 
 window_functions: Dict[str, Tuple[float, Callable[[int, int], np.ndarray]]] = {
     "rectangular": (0.9, lambda N: np.ones(N)),

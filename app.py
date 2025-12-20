@@ -260,7 +260,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", str(e))
 
     def _generate_filter(self):
-        """Prompt user for filter parameters and generate filter signal."""
+        """Prompt user for filter specifications and generate filter signal."""
         try:
             simple_types = ["Low-pass", "High-pass"]
             complex_types = ["Band-pass", "Band-stop"]
@@ -269,31 +269,33 @@ class MainWindow(QMainWindow):
             filter_type, ok = QInputDialog.getItem(self, "Filter Type", "Select filter type:", filter_types, 0, False)
             if not ok:
                 return
+            
+            is_simple = filter_type in simple_types
 
             cutoff_freqs, ok = QInputDialog.getText(
                 self,
                 "Cutoff Frequency/Frequencies",
                 "Enter cutoff frequency/frequencies (Hz) separated by comma:",
                 QLineEdit.EchoMode.Normal,
-                "10" if filter_type in simple_types else "5,15"
+                "1500" if is_simple else "150,250"
             )
             if not ok:
                 return
 
-            fs, ok = QInputDialog.getDouble(self, "Sampling Frequency", "Enter sampling frequency (Hz):", 50.0, 0.1)
+            fs, ok = QInputDialog.getDouble(self, "Sampling Frequency", "Enter sampling frequency (Hz):", 8000.0 if is_simple else 1000.0, 0.1)
             if not ok:
                 return
 
             cutoff_freqs = [float(cf.strip()) for cf in cutoff_freqs.split(",")]
-            if (filter_type in simple_types and len(cutoff_freqs) != 1) or (filter_type in complex_types and len(cutoff_freqs) != 2):
+            if (is_simple and len(cutoff_freqs) != 1) or (filter_type in complex_types and len(cutoff_freqs) != 2):
                 QMessageBox.critical(self, "Error", "Incorrect number of cutoff frequencies provided.")
                 return
             
-            transition_width, ok = QInputDialog.getDouble(self, "Transition Width", "Enter transition width (Hz):", 2.0, 0.1)
+            transition_width, ok = QInputDialog.getDouble(self, "Transition Width", "Enter transition width (Hz):", 500.0 if is_simple else 50.0, 0.1)
             if not ok:
                 return
             
-            attenuation, ok = QInputDialog.getDouble(self, "Attenuation", "Enter attenuation (dB):", 60.0, 0.1)
+            attenuation, ok = QInputDialog.getDouble(self, "Attenuation", "Enter attenuation (dB):", 60.0 if not is_simple else 70.0 if filter_type == 'High-pass' else 50.0, 0.1)
             if not ok:
                 return
             
@@ -310,24 +312,23 @@ class MainWindow(QMainWindow):
             
             normalized_transition_width = transition_width / fs
             
-            C, window = window_functions[window_type]
+            C, window_func = window_functions[window_type]
             N = C / normalized_transition_width
             
             ceiled_N = math.ceil(N)
             N = ceiled_N if ceiled_N % 2 != 0 else ceiled_N + 1
             n = (N - 1) // 2 # always integer since N is odd
             
-            window_values = window(N, n)
+            window_values = window_func(N, n)
             
             normalized_cutoff_freqs = [(fc + (transition_width / 2)) / fs for fc in cutoff_freqs]
             
-            filter = filters[filter_type]
+            filter_func = filters[filter_type]
             
-            filter_values = filter(n, normalized_cutoff_freqs)
+            filter_values = filter_func(n, normalized_cutoff_freqs)
             
-            h = filter_values * window_values
             file_name = f"{filter_type.replace('-', '_').lower()}"
-            filter_signal = Signal(h, -n, file_name)
+            filter_signal = Signal(filter_values * window_values, -n, file_name)
             
             self.add_signal_to_list(filter_signal)
             self.refresh_list_items()
@@ -690,7 +691,7 @@ class MainWindow(QMainWindow):
     def handle_template_correlation(self, sig1: Union[Signal, Tuple[List[Signal], str]], sig2: Union[Signal, Tuple[List[Signal], str]]):
         """Handle correlation when one of the signals is a template (group of signals)."""
         if isinstance(sig1, tuple) and isinstance(sig2, tuple):
-            raise AssertionError("Convolution/Correlation between two templates is not supported.")
+            raise AssertionError("Correlation between two templates is not supported.")
         
         if isinstance(sig1, tuple):
             template_signals, template_name = sig1
@@ -728,12 +729,38 @@ class MainWindow(QMainWindow):
                 self.handle_template_correlation(sig1, sig2)
                 return
             
-            res = sig1.convolve(sig2) if _type == 'convolution' else sig1.correlation(sig2)
+            if not isinstance(sig1, Signal) or not isinstance(sig2, Signal):
+                raise AssertionError(f"{_type.title()} between templates is not supported.")
+            
+            method: Literal["Direct", "DFT-based"] = "Direct"
+            _type_simple = _type.lower()[:3]
+            
+            if _type == "convolution":
+                conv_methods = ["Direct", "DFT-based"]
+                method, ok = QInputDialog.getItem(self, "Method", "Select method:", conv_methods, 0, False)
+                if not ok:
+                    return
+            
+            if method == "Direct":
+                res = sig1.convolve(sig2) if _type == 'convolution' else sig1.correlation(sig2)
+                res.name = f"{sig1.name}_{_type_simple}_{sig2.name}_direct"
+            else:
+                L = sig1.values.size + sig2.values.size - 1
+
+                x = np.pad(sig1.values, (0, L - sig1.values.size))
+                h = np.pad(sig2.values, (0, L - sig2.values.size))
+
+                X = Signal(x, 0).fourier()
+                H = Signal(h, 0).fourier()
+                
+                res = Signal(X.values * H.values, 0, is_freq_domain=True).fourier(idft=True)
+                res.start = sig1.start + sig2.start
+                res.name = f"{sig1.name}_{_type_simple}_{sig2.name}_dft"
+                
             if _type == 'correlation':
                 max_idx = Signal.argmax_abs(res.values)
-
-                # Convert index → lag
                 delay_samples = res.start + max_idx
+                
                 sf, ok = QInputDialog.getDouble(self, "Sampling Frequency", "Enter sampling frequency (Hz):", 50.0, 0.1)
                 if not ok:
                     return
