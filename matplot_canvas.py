@@ -67,13 +67,18 @@ class MplCanvas(FigureCanvasQTAgg):
             if s.values.size == 0:
                 continue
             
-            if s.is_frequency_domain:
-                print(f"Skipping signal '{s.name}' (is in frequency domain)")
+            arr = np.zeros(n.size, dtype=float)
+            idx = s.start - full_start
+
+            vals = s.values
+            if np.iscomplexobj(vals):
+                vals = np.real_if_close(vals, tol=1e-9)
+
+            if np.iscomplexobj(vals):
+                print(f"Skipping signal '{s.name}' (true complex / frequency domain)")
                 continue
 
-            arr = np.zeros(n.size)
-            idx = s.start - full_start
-            arr[idx:idx + s.values.size] = s.values
+            arr[idx:idx + vals.size] = vals
 
             if is_discrete:
                 markerline, stemlines, baseline = self.ax.stem(n, arr, label=s.name)

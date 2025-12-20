@@ -2,15 +2,67 @@
 # Signal representation
 # -------------------------
 import os
-from typing import Any, Callable, List, Literal, Optional, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 import numpy as np
 import math
+
+def _hanning(N: int, n: int) -> np.ndarray:
+    return 0.5 + 0.5 * np.cos(2 * np.pi * np.arange(-n, n + 1) / N)
+
+def _hamming(N: int, n: int) -> np.ndarray:
+    return 0.54 + 0.46 * np.cos(2 * np.pi * np.arange(-n, n + 1) / N)
+
+def _blackman(N: int, n: int) -> np.ndarray:
+    factor = np.pi * np.arange(-n, n + 1) / (N - 1)
+    return 0.42 + 0.5 * np.cos(2 * factor) + 0.08 * np.cos(4 * factor)
+
+def _pass_filter(n: int, fc: float, zero_value: Optional[float] = None):
+    if zero_value is None:
+        zero_value = 2 * fc
+        
+    n_arr = np.arange(-n, n + 1) # [-3, -2, -1, 0, 1, 2, 3] for n=3
+    omega = 2 * np.pi * fc
+    values = 2 * fc * np.sin(omega * n_arr) / (n_arr * omega)
+    return np.where(n_arr == 0, zero_value, values)
+
+def _lowpass(n: int, normalized_cutoff_freqs: List[float]):
+    fc = normalized_cutoff_freqs[0]
+    return _pass_filter(n, fc)
+
+def _highpass(n: int, normalized_cutoff_freqs: List[float]):
+    fc = normalized_cutoff_freqs[0]
+    return -_pass_filter(n, fc, zero_value=-(1 - 2 * fc))
+
+def _bandpass(n: int, normalized_cutoff_freqs: List[float]):
+    fc1, fc2 = sorted(normalized_cutoff_freqs)
+    return _pass_filter(n, fc2) - _pass_filter(n, fc1)
+
+def _bandstop(n: int, normalized_cutoff_freqs: List[float]):
+    fc1, fc2 = sorted(normalized_cutoff_freqs)
+    h = _pass_filter(n, fc1) - _pass_filter(n, fc2)
+    h[n] = 1 - 2 * (fc2 - fc1)
+    return h
+
+window_functions: Dict[str, Tuple[float, Callable[[int, int], np.ndarray]]] = {
+    "rectangular": (0.9, lambda N: np.ones(N)),
+    "hanning": (3.1, _hanning),
+    "hamming": (3.3, _hamming),
+    "blackman": (5.5, _blackman),
+}
+
+filters: Dict[str, Callable[[int, List[float]], np.ndarray]] = {
+    "Low-pass": _lowpass,
+    "High-pass": _highpass,
+    "Band-pass": _bandpass,
+    "Band-stop": _bandstop,
+}
 
 class Signal:
     """
     Represents a discrete-time signal as a numpy array with a start index n0.
     If samples correspond to indices n0 ... n0 + len(values) - 1.
     """
+    
     def __init__(self, values: np.ndarray, start_index: int, name: str = "signal", is_freq_domain: bool = False):
         self.values = values
         self.start = int(start_index)
