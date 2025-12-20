@@ -5,7 +5,6 @@ __pycache__/
 .idea/
 .vscode/
 
-tests/
 Lab7-8/
 DFT/
 IDFT/
